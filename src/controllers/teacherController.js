@@ -176,9 +176,69 @@ const getAttendanceByDate = async (req, res) => {
   }
 };
 
+// GET /api/teacher/my-attendance?month=4&year=2026
+// Returns the logged-in teacher's own attendance records
+const getMyAttendanceRecords = async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    const { Op } = require('sequelize');
+    const TeacherAttendance = require('../models/TeacherAttendance');
+
+    const teacher = await Teacher.findOne({ where: { user_id: req.user.id } });
+    if (!teacher) return res.status(404).json({ message: 'Teacher profile not found' });
+
+    let whereClause = { teacher_id: teacher.id };
+
+    if (month && year) {
+      const mm = String(month).padStart(2, '0');
+      const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate();
+      whereClause.date = {
+        [Op.between]: [
+          `${year}-${mm}-01`,
+          `${year}-${mm}-${String(lastDay).padStart(2, '0')}`,
+        ],
+      };
+    }
+
+    const records = await TeacherAttendance.findAll({
+      where: whereClause,
+      order: [['date', 'DESC']],
+    });
+
+    const today = new Date().toISOString().split('T')[0];
+    const todayRecord = records.find((r) => r.date === today) || null;
+
+    res.json({
+      teacherId: teacher.id,
+      records: records.map((r) => ({
+        id: r.id,
+        date: r.date,
+        status: r.status,
+        checkInTime: r.check_in_time,
+        checkOutTime: r.check_out_time,
+        leaveType: r.leave_type,
+        remarks: r.remarks,
+      })),
+      todayRecord: todayRecord ? {
+        id: todayRecord.id,
+        date: todayRecord.date,
+        status: todayRecord.status,
+        checkInTime: todayRecord.check_in_time,
+        checkOutTime: todayRecord.check_out_time,
+        leaveType: todayRecord.leave_type,
+        remarks: todayRecord.remarks,
+      } : null,
+    });
+  } catch (error) {
+    console.error('Get my attendance error:', error);
+    res.status(500).json({ message: 'Failed to fetch attendance' });
+  }
+};
+
 module.exports = {
   getMyClasses,
   getStudentsByClass,
   submitAttendance,
   getAttendanceByDate,
+  getMyAttendanceRecords,
 };
