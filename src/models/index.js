@@ -5,6 +5,8 @@ const Teacher = require("./Teacher");
 const Class = require("./Class");
 const Attendance = require('./Attendance');
 const TeacherAttendance = require('./TeacherAttendance');
+const Timetable = require('./Timetable');
+const ClassTask = require('./ClassTask');
 
 // ===== ASSOCIATIONS =====
 
@@ -37,6 +39,18 @@ Attendance.belongsTo(Teacher, { foreignKey: 'marked_by_teacher', as: 'markedByTe
 Teacher.hasMany(TeacherAttendance, { foreignKey: 'teacher_id', as: 'teacherAttendanceRecords' });
 TeacherAttendance.belongsTo(Teacher, { foreignKey: 'teacher_id', as: 'teacher' });
 
+// Timetable associations
+Class.hasMany(Timetable, { foreignKey: 'class_id', as: 'timetableEntries' });
+Timetable.belongsTo(Class, { foreignKey: 'class_id', as: 'class' });
+Teacher.hasMany(Timetable, { foreignKey: 'teacher_id', as: 'timetableEntries' });
+Timetable.belongsTo(Teacher, { foreignKey: 'teacher_id', as: 'teacher' });
+
+// ClassTask associations
+Class.hasMany(ClassTask, { foreignKey: 'class_id', as: 'classTasks' });
+ClassTask.belongsTo(Class, { foreignKey: 'class_id', as: 'class' });
+Teacher.hasMany(ClassTask, { foreignKey: 'teacher_id', as: 'classTasks' });
+ClassTask.belongsTo(Teacher, { foreignKey: 'teacher_id', as: 'teacher' });
+
 module.exports = {
   sequelize,
   User,
@@ -45,4 +59,6 @@ module.exports = {
   Class,
   Attendance,
   TeacherAttendance,
+  Timetable,
+  ClassTask,
 };
