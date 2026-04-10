@@ -5,6 +5,8 @@ const {
   getMyAttendance,
   getAttendanceSummary,
 } = require('../controllers/studentController');
+const timetableController = require('../controllers/timetableController');
+const classTaskController = require('../controllers/classTaskController');
 
 // Dev bypass: inject first student user so controllers can use req.user.id
 router.use(async (req, res, next) => {
@@ -18,5 +20,12 @@ router.use(async (req, res, next) => {
 
 router.get('/attendance', getMyAttendance);
 router.get('/attendance/summary', getAttendanceSummary);
+
+// Timetable
+router.get('/timetable', timetableController.getStudentTimetable);
+
+// Classwork/Homework — specific path before param route
+router.get('/class-tasks/week', classTaskController.getStudentWeekTasks);
+router.get('/class-tasks', classTaskController.getStudentClassTasks);
 
 module.exports = router;
