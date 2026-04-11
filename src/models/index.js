@@ -11,6 +11,7 @@ const Session = require('./Session');
 const StudentFee = require('./StudentFee');
 const FeePayment = require('./FeePayment');
 const PaymentLog = require('./PaymentLog');
+const Mark = require('./Mark');
 
 // ===== ASSOCIATIONS =====
 
@@ -68,6 +69,12 @@ Student.hasMany(FeePayment, { foreignKey: 'student_id', as: 'feePayments' });
 FeePayment.belongsTo(Student, { foreignKey: 'student_id', as: 'student' });
 FeePayment.belongsTo(FeePayment, { foreignKey: 'reversal_for', as: 'originalPayment' });
 
+// Mark associations
+Student.hasMany(Mark, { foreignKey: 'student_id', as: 'marks' });
+Mark.belongsTo(Student, { foreignKey: 'student_id', as: 'student' });
+Class.hasMany(Mark, { foreignKey: 'class_id', as: 'marks' });
+Mark.belongsTo(Class, { foreignKey: 'class_id', as: 'class' });
+
 module.exports = {
   sequelize,
   User,
@@ -82,4 +89,5 @@ module.exports = {
   StudentFee,
   FeePayment,
   PaymentLog,
+  Mark,
 };

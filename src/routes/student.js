@@ -8,6 +8,7 @@ const {
 const timetableController = require('../controllers/timetableController');
 const classTaskController = require('../controllers/classTaskController');
 const feeController = require('../controllers/feeController');
+const marksController = require('../controllers/marksController');
 
 // Dev bypass: inject first student user so controllers can use req.user.id
 router.use(async (req, res, next) => {
@@ -31,5 +32,8 @@ router.get('/class-tasks', classTaskController.getStudentClassTasks);
 
 // Fee history
 router.get('/fee-history', feeController.getMyFeeHistory);
+
+// Results
+router.get('/results', marksController.getOwnResults);
 
 module.exports = router;

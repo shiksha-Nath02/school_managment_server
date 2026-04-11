@@ -10,6 +10,7 @@ const {
 } = require('../controllers/teacherController');
 const timetableController = require('../controllers/timetableController');
 const classTaskController = require('../controllers/classTaskController');
+const marksController = require('../controllers/marksController');
 
 // Dev bypass: inject first teacher user so controllers can use req.user.id
 router.use(async (req, res, next) => {
@@ -44,5 +45,11 @@ router.put('/timetable/:classId', timetableController.updateTimetable);
 // Classwork/Homework — specific path before param route
 router.get('/class-tasks/form-data/:classId', classTaskController.getFormData);
 router.post('/class-tasks', classTaskController.saveClassTasks);
+
+// Marks — specific paths before param route
+router.get('/marks/subjects/:classId', marksController.getSubjectsForClass);
+router.get('/marks/exam-types/:classId', marksController.getExamTypes);
+router.get('/marks/:classId', marksController.getMarks);
+router.post('/marks', marksController.saveMarks);
 
 module.exports = router;
