@@ -56,7 +56,7 @@ const getStudents = async (req, res) => {
   try {
     const { class_id, search } = req.query;
     const where = {};
-    if (class_id) where.class_id = class_id;
+    if (class_id) where.class_id = parseInt(class_id, 10);
     const students = await Student.findAll({
       where,
       include: [

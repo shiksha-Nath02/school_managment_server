@@ -41,6 +41,11 @@ const Student = sequelize.define(
       type: DataTypes.DATE,
       allowNull: true,
     },
+    status: {
+      type: DataTypes.ENUM('active', 'inactive', 'promoted'),
+      allowNull: false,
+      defaultValue: 'active',
+    },
   },
   {
     tableName: "students",

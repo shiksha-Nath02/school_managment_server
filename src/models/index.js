@@ -7,6 +7,10 @@ const Attendance = require('./Attendance');
 const TeacherAttendance = require('./TeacherAttendance');
 const Timetable = require('./Timetable');
 const ClassTask = require('./ClassTask');
+const Session = require('./Session');
+const StudentFee = require('./StudentFee');
+const FeePayment = require('./FeePayment');
+const PaymentLog = require('./PaymentLog');
 
 // ===== ASSOCIATIONS =====
 
@@ -51,6 +55,19 @@ ClassTask.belongsTo(Class, { foreignKey: 'class_id', as: 'class' });
 Teacher.hasMany(ClassTask, { foreignKey: 'teacher_id', as: 'classTasks' });
 ClassTask.belongsTo(Teacher, { foreignKey: 'teacher_id', as: 'teacher' });
 
+// Session associations
+Session.hasMany(StudentFee, { foreignKey: 'session_id', as: 'studentFees' });
+StudentFee.belongsTo(Session, { foreignKey: 'session_id', as: 'session' });
+
+// StudentFee associations
+Student.hasMany(StudentFee, { foreignKey: 'student_id', as: 'feeConfigs' });
+StudentFee.belongsTo(Student, { foreignKey: 'student_id', as: 'student' });
+
+// FeePayment associations
+Student.hasMany(FeePayment, { foreignKey: 'student_id', as: 'feePayments' });
+FeePayment.belongsTo(Student, { foreignKey: 'student_id', as: 'student' });
+FeePayment.belongsTo(FeePayment, { foreignKey: 'reversal_for', as: 'originalPayment' });
+
 module.exports = {
   sequelize,
   User,
@@ -61,4 +78,8 @@ module.exports = {
   TeacherAttendance,
   Timetable,
   ClassTask,
+  Session,
+  StudentFee,
+  FeePayment,
+  PaymentLog,
 };

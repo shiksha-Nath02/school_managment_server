@@ -3,6 +3,7 @@ const cors = require("cors");
 
 const authRoutes = require("./routes/auth");
 const adminRoutes = require("./routes/admin");
+const feeRoutes = require("./routes/fees");
 const teacherRoutes = require('./routes/teacher');
 const studentRoutes = require('./routes/student');
 
@@ -21,6 +22,7 @@ app.get("/api/health", (req, res) => {
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/admin", feeRoutes);
 app.use('/api/teacher', teacherRoutes);
 app.use('/api/student', studentRoutes);
 
