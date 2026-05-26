@@ -1,6 +1,19 @@
+const path = require('path');
+const fs = require('fs');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const { User, Student, Teacher, Class, Attendance } = require('../models');
+const TeacherAttendance = require('../models/TeacherAttendance');
+
+const LATE_THRESHOLD = { hour: 9, minute: 30 };
+
+function saveBase64Image(base64Data, filename) {
+  const dir = path.join(__dirname, '../../uploads/attendance');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const data = base64Data.replace(/^data:image\/\w+;base64,/, '');
+  fs.writeFileSync(path.join(dir, filename), Buffer.from(data, 'base64'));
+  return `uploads/attendance/${filename}`;
+}
 
 // GET /api/teacher/classes
 // Returns classes assigned to the logged-in teacher (via class_teacher_id)
@@ -208,26 +221,18 @@ const getMyAttendanceRecords = async (req, res) => {
     const today = new Date().toISOString().split('T')[0];
     const todayRecord = records.find((r) => r.date === today) || null;
 
+    const mapRecord = (r) => ({
+      id: r.id, date: r.date, status: r.status,
+      checkInTime: r.check_in_time, checkInImage: r.check_in_image || null,
+      checkOutTime: r.check_out_time, checkOutImage: r.check_out_image || null,
+      leaveType: r.leave_type, remarks: r.remarks,
+      isVerified: r.is_verified || false,
+    });
+
     res.json({
       teacherId: teacher.id,
-      records: records.map((r) => ({
-        id: r.id,
-        date: r.date,
-        status: r.status,
-        checkInTime: r.check_in_time,
-        checkOutTime: r.check_out_time,
-        leaveType: r.leave_type,
-        remarks: r.remarks,
-      })),
-      todayRecord: todayRecord ? {
-        id: todayRecord.id,
-        date: todayRecord.date,
-        status: todayRecord.status,
-        checkInTime: todayRecord.check_in_time,
-        checkOutTime: todayRecord.check_out_time,
-        leaveType: todayRecord.leave_type,
-        remarks: todayRecord.remarks,
-      } : null,
+      records: records.map(mapRecord),
+      todayRecord: todayRecord ? mapRecord(todayRecord) : null,
     });
   } catch (error) {
     console.error('Get my attendance error:', error);
@@ -235,10 +240,134 @@ const getMyAttendanceRecords = async (req, res) => {
   }
 };
 
+const selfCheckIn = async (req, res) => {
+  try {
+    const { image_base64 } = req.body;
+    const teacher = await Teacher.findOne({ where: { user_id: req.user.id } });
+    if (!teacher) return res.status(404).json({ message: 'Teacher profile not found' });
+
+    const today = new Date().toISOString().split('T')[0];
+    const checkInTime = new Date().toTimeString().slice(0, 8);
+
+    const existing = await TeacherAttendance.findOne({ where: { teacher_id: teacher.id, date: today } });
+    if (existing?.check_in_time) return res.status(400).json({ message: 'Already checked in today' });
+
+    const [h, m] = checkInTime.split(':').map(Number);
+    const isLate = h > LATE_THRESHOLD.hour || (h === LATE_THRESHOLD.hour && m > LATE_THRESHOLD.minute);
+
+    let imagePath = null;
+    if (image_base64) {
+      imagePath = saveBase64Image(image_base64, `checkin_${teacher.id}_${Date.now()}.jpg`);
+    }
+
+    let record;
+    if (existing) {
+      await existing.update({ status: isLate ? 'late' : 'present', check_in_time: checkInTime, check_in_image: imagePath, is_verified: false });
+      record = existing;
+    } else {
+      record = await TeacherAttendance.create({
+        teacher_id: teacher.id, date: today,
+        status: isLate ? 'late' : 'present',
+        check_in_time: checkInTime, check_in_image: imagePath, is_verified: false,
+      });
+    }
+
+    res.json({
+      message: `Checked in as ${record.status}. Pending admin verification.`,
+      record: {
+        id: record.id, status: record.status,
+        checkInTime: record.check_in_time, checkInImage: record.check_in_image,
+        isVerified: record.is_verified,
+      },
+    });
+  } catch (error) {
+    console.error('Self check-in error:', error);
+    res.status(500).json({ message: 'Failed to check in' });
+  }
+};
+
+const selfCheckOut = async (req, res) => {
+  try {
+    const { image_base64 } = req.body;
+    const teacher = await Teacher.findOne({ where: { user_id: req.user.id } });
+    if (!teacher) return res.status(404).json({ message: 'Teacher profile not found' });
+
+    const today = new Date().toISOString().split('T')[0];
+    const checkOutTime = new Date().toTimeString().slice(0, 8);
+
+    const record = await TeacherAttendance.findOne({ where: { teacher_id: teacher.id, date: today } });
+    if (!record?.check_in_time) return res.status(400).json({ message: 'You have not checked in today' });
+    if (record.check_out_time) return res.status(400).json({ message: 'Already checked out today' });
+
+    let imagePath = null;
+    if (image_base64) {
+      imagePath = saveBase64Image(image_base64, `checkout_${teacher.id}_${Date.now()}.jpg`);
+    }
+
+    const [ciH, ciM] = record.check_in_time.split(':').map(Number);
+    const [coH, coM] = checkOutTime.split(':').map(Number);
+    const totalMinutes = (coH * 60 + coM) - (ciH * 60 + ciM);
+    const newStatus = totalMinutes < 240 ? 'half_day' : record.status;
+
+    await record.update({ check_out_time: checkOutTime, check_out_image: imagePath, status: newStatus, is_verified: false });
+
+    res.json({
+      message: `Checked out${totalMinutes < 240 ? ' — half day recorded' : ''}. Pending admin verification.`,
+      record: {
+        id: record.id, status: record.status,
+        checkInTime: record.check_in_time, checkInImage: record.check_in_image,
+        checkOutTime: record.check_out_time, checkOutImage: record.check_out_image,
+        isVerified: record.is_verified,
+      },
+    });
+  } catch (error) {
+    console.error('Self check-out error:', error);
+    res.status(500).json({ message: 'Failed to check out' });
+  }
+};
+
+// GET /api/teacher/my-students?class_id=
+// Returns full student records for the teacher's assigned class(es)
+const getMyStudents = async (req, res) => {
+  try {
+    const teacher = await Teacher.findOne({ where: { user_id: req.user.id } });
+    if (!teacher) return res.status(404).json({ message: 'Teacher profile not found' });
+
+    const teacherClasses = await Class.findAll({
+      where: { class_teacher_id: teacher.id },
+      order: [['class_name', 'ASC'], ['section', 'ASC']],
+    });
+    const classIds = teacherClasses.map((c) => c.id);
+    if (!classIds.length) return res.json({ success: true, students: [], classes: [] });
+
+    const { class_id } = req.query;
+    const classFilter = class_id && classIds.includes(parseInt(class_id, 10))
+      ? parseInt(class_id, 10)
+      : { [Op.in]: classIds };
+
+    const students = await Student.findAll({
+      where: { class_id: classFilter },
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] },
+        { model: Class, as: 'class', attributes: ['id', 'class_name', 'section'] },
+      ],
+      order: [['roll_number', 'ASC']],
+    });
+
+    res.json({ success: true, students, classes: teacherClasses });
+  } catch (error) {
+    console.error('getMyStudents error:', error);
+    res.status(500).json({ message: 'Failed to fetch students' });
+  }
+};
+
 module.exports = {
   getMyClasses,
   getStudentsByClass,
+  getMyStudents,
   submitAttendance,
   getAttendanceByDate,
   getMyAttendanceRecords,
+  selfCheckIn,
+  selfCheckOut,
 };

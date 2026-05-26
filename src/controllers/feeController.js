@@ -1,4 +1,4 @@
-const { FeePayment, StudentFee, Student, User, Class, Session, PaymentLog } = require('../models');
+const { FeePayment, StudentFee, Student, User, Class, Session, PaymentLog, UniformPayment, UniformTransaction, BookPayment, BookTransaction, Expense } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const {
@@ -481,6 +481,7 @@ const getStudentsWithDues = async (req, res) => {
           class: student.class ? `${student.class.class_name}-${student.class.section}` : null,
           class_id: student.class_id,
           roll_number: student.roll_number,
+          category: student.category || null,
           pending,
           fine,
           total_due: pending + fine,
@@ -666,71 +667,120 @@ const recordReversal = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────────
-// PROFIT REPORT
-// GET /api/admin/fees/profit?start_date=&end_date=&month=&year=&session_id=
+// PROFIT REPORT — consolidated across all sources
+// GET /api/admin/profit?from=YYYY-MM-DD&to=YYYY-MM-DD
 // ──────────────────────────────────────────────────
 const getProfitReport = async (req, res) => {
   try {
-    const { start_date, end_date, month, year, session_id } = req.query;
+    const { from, to } = req.query;
 
-    let dateWhere = {};
+    const dateCond = (col) => {
+      if (from && to) return { [col]: { [Op.between]: [from, to] } };
+      if (from)       return { [col]: { [Op.gte]: from } };
+      if (to)         return { [col]: { [Op.lte]: to } };
+      return {};
+    };
 
-    if (start_date && end_date) {
-      dateWhere.date = { [Op.between]: [start_date, end_date] };
-    } else if (month && year) {
-      const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
-      const lastDay = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
-      dateWhere.date = { [Op.between]: [firstDay, lastDay] };
-    } else if (session_id) {
-      const session = await Session.findByPk(session_id);
-      if (session) {
-        const startStr = `${session.start_year}-${String(session.start_month).padStart(2, '0')}-01`;
-        const endDay = new Date(session.end_year, session.end_month, 0).getDate();
-        const endStr = `${session.end_year}-${String(session.end_month).padStart(2, '0')}-${endDay}`;
-        dateWhere.date = { [Op.between]: [startStr, endStr] };
-      }
+    const [paymentLogs, uniformPayments, bookPayments, stationaryExpenses, pantryExpenses] = await Promise.all([
+      PaymentLog.findAll({ where: dateCond('date'), order: [['date', 'DESC']] }),
+      UniformPayment.findAll({
+        where: dateCond('payment_date'),
+        include: [{ model: UniformTransaction, as: 'transaction', attributes: ['admission_number', 'student_name'] }],
+      }),
+      BookPayment.findAll({
+        where: dateCond('payment_date'),
+        include: [{ model: BookTransaction, as: 'transaction', attributes: ['admission_number', 'student_name'] }],
+      }),
+      Expense.findAll({ where: { category: 'stationary', ...dateCond('date') } }),
+      Expense.findAll({ where: { category: 'pantry',    ...dateCond('date') } }),
+    ]);
+
+    const transactions = [];
+
+    for (const log of paymentLogs) {
+      transactions.push({
+        id: `log_${log.id}`,
+        type: log.type,
+        direction: log.direction,
+        amount: parseFloat(log.amount),
+        date: log.date,
+        description: log.description || '',
+      });
     }
 
-    const entries = await PaymentLog.findAll({
-      where: dateWhere,
-      order: [['date', 'DESC'], ['id', 'DESC']]
-    });
-
-    const totalIncome = entries
-      .filter(e => e.direction === 'income')
-      .reduce((sum, e) => sum + parseFloat(e.amount), 0);
-    const totalExpenditure = entries
-      .filter(e => e.direction === 'expenditure')
-      .reduce((sum, e) => sum + parseFloat(e.amount), 0);
-    const profit = totalIncome - totalExpenditure;
-
-    // Breakdown by type
-    const breakdownMap = {};
-    for (const e of entries) {
-      if (!breakdownMap[e.type]) {
-        breakdownMap[e.type] = { type: e.type, direction: e.direction, total: 0, count: 0 };
-      }
-      breakdownMap[e.type].total += parseFloat(e.amount);
-      breakdownMap[e.type].count += 1;
+    for (const up of uniformPayments) {
+      const txn = up.transaction;
+      transactions.push({
+        id: `uniform_${up.id}`,
+        type: 'uniform',
+        direction: 'income',
+        amount: parseFloat(up.amount_paid),
+        date: up.payment_date,
+        description: `Uniform purchase${txn?.student_name ? ` — ${txn.student_name}` : ''}${up.remarks ? ` (${up.remarks})` : ''}`,
+      });
     }
+
+    for (const bp of bookPayments) {
+      const txn = bp.transaction;
+      transactions.push({
+        id: `book_${bp.id}`,
+        type: 'books',
+        direction: 'income',
+        amount: parseFloat(bp.amount_paid),
+        date: bp.payment_date,
+        description: `Book purchase${txn?.student_name ? ` — ${txn.student_name}` : ''}${bp.remarks ? ` (${bp.remarks})` : ''}`,
+      });
+    }
+
+    for (const exp of stationaryExpenses) {
+      transactions.push({
+        id: `stat_${exp.id}`,
+        type: 'stationery',
+        direction: 'expenditure',
+        amount: parseFloat(exp.amount),
+        date: exp.date,
+        description: exp.description || 'Stationery expense',
+      });
+    }
+
+    for (const exp of pantryExpenses) {
+      transactions.push({
+        id: `pantry_${exp.id}`,
+        type: 'pantry',
+        direction: 'expenditure',
+        amount: parseFloat(exp.amount),
+        date: exp.date,
+        description: exp.description || 'Pantry expense',
+      });
+    }
+
+    transactions.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+
+    const income      = transactions.filter(t => t.direction === 'income');
+    const expenditure = transactions.filter(t => t.direction === 'expenditure');
+
+    const totalIncome      = income.reduce((s, t) => s + t.amount, 0);
+    const totalExpenditure = expenditure.reduce((s, t) => s + t.amount, 0);
+    const profit           = totalIncome - totalExpenditure;
+
+    const groupByType = (arr) => {
+      const map = {};
+      for (const t of arr) {
+        if (!map[t.type]) map[t.type] = { type: t.type, total: 0, count: 0 };
+        map[t.type].total += t.amount;
+        map[t.type].count += 1;
+      }
+      return Object.values(map).sort((a, b) => b.total - a.total);
+    };
 
     res.json({
       success: true,
-      summary: {
-        total_income: totalIncome,
-        total_expenditure: totalExpenditure,
-        profit,
-        entry_count: entries.length
-      },
-      breakdown: Object.values(breakdownMap),
-      entries: entries.map(e => ({
-        id: e.id,
-        type: e.type,
-        direction: e.direction,
-        amount: parseFloat(e.amount),
-        date: e.date,
-        description: e.description
-      }))
+      totalIncome,
+      totalExpenditure,
+      profit,
+      incomeByType: groupByType(income),
+      expenditureByType: groupByType(expenditure),
+      transactions,
     });
   } catch (error) {
     console.error('Error fetching profit report:', error);
