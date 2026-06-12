@@ -12,6 +12,7 @@ const uniformRoutes = require('./routes/uniform');
 const bookRoutes = require('./routes/books');
 const expenseRoutes = require('./routes/expenses');
 const documentRoutes = require('./routes/documents');
+const { authenticate, authorize } = require('./middlewares/auth');
 
 const app = express();
 
@@ -26,16 +27,19 @@ app.get("/api/health", (req, res) => {
 });
 
 // Routes
+// /api/auth is public (login); everything else is gated by role.
 app.use("/api/auth", authRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/admin", feeRoutes);
-app.use("/api/admin", inventoryRoutes);
-app.use("/api/admin", uniformRoutes);
-app.use("/api/admin", bookRoutes);
-app.use("/api/admin", expenseRoutes);
-app.use("/api/admin", documentRoutes);
-app.use('/api/teacher', teacherRoutes);
-app.use('/api/student', studentRoutes);
+
+const adminOnly = [authenticate, authorize("admin")];
+app.use("/api/admin", adminOnly, adminRoutes);
+app.use("/api/admin", adminOnly, feeRoutes);
+app.use("/api/admin", adminOnly, inventoryRoutes);
+app.use("/api/admin", adminOnly, uniformRoutes);
+app.use("/api/admin", adminOnly, bookRoutes);
+app.use("/api/admin", adminOnly, expenseRoutes);
+app.use("/api/admin", adminOnly, documentRoutes);
+app.use('/api/teacher', authenticate, authorize("teacher"), teacherRoutes);
+app.use('/api/student', authenticate, authorize("student"), studentRoutes);
 
 // 404 handler
 app.use((req, res) => {

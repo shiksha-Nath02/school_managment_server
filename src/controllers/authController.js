@@ -3,22 +3,24 @@ const jwt = require("jsonwebtoken");
 const { User } = require("../models");
 
 // POST /api/auth/login
+// Single endpoint for all roles. Users log in with their username
+// (admission number for students, teacher ID for teachers).
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { username, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
+    if (!username || !password) {
+      return res.status(400).json({ message: "Username and password are required" });
     }
 
-    const user = await User.findOne({ where: { email } });
+    const user = await User.findOne({ where: { username } });
     if (!user || !user.is_active) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({ message: "Invalid username or password" });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ message: "Invalid email or password" });
+      return res.status(401).json({ message: "Invalid username or password" });
     }
 
     const token = jwt.sign(
@@ -33,6 +35,7 @@ const login = async (req, res) => {
       user: {
         id: user.id,
         name: user.name,
+        username: user.username,
         email: user.email,
         role: user.role,
         phone: user.phone,
@@ -51,6 +54,7 @@ const getMe = async (req, res) => {
       user: {
         id: req.user.id,
         name: req.user.name,
+        username: req.user.username,
         email: req.user.email,
         role: req.user.role,
         phone: req.user.phone,

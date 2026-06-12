@@ -26,15 +26,7 @@ const requireSelfAttendanceEnabled = (req, res, next) => {
   next();
 };
 
-// Dev bypass: inject first teacher user so controllers can use req.user.id
-router.use(async (req, res, next) => {
-  try {
-    req.user = await User.findOne({ where: { role: 'teacher' } });
-    next();
-  } catch (err) {
-    next(err);
-  }
-});
+// req.user is set by the authenticate middleware mounted in app.js.
 
 router.get('/classes', getMyClasses);
 router.get('/students/:classId', getStudentsByClass);

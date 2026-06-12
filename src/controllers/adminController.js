@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
 const { User, Student, Teacher, Class, TeacherAttendance, Attendance, Mark, StudentFee, FeePayment, Inventory, InventoryTransaction, Session, Timetable, UniformTransaction, UniformItem, UniformPayment, BookTransaction, BookItem, BookPayment, sequelize } = require('../models');
 const { saveBase64Image } = require('../utils/imageHelper');
+const { generateStudentPassword } = require('../utils/credentials');
 const selfAttendanceSettings = require('../utils/selfAttendanceSettings');
 
 const studentIncludes = [
@@ -32,17 +33,20 @@ const addStudent = async (req, res) => {
   const t = await sequelize.transaction();
   try {
     const {
-      name, email, phone, password, class_id, roll_number, date_of_birth, address, admission_date,
+      name, username, email, phone, password, class_id, roll_number, date_of_birth, address, admission_date,
       aadhaar_number, blood_group, category, religion, nationality,
       city, state, pincode,
       father_name, father_phone, father_aadhaar,
       mother_name, mother_phone, mother_aadhaar,
       parents_pan, birth_certificate_number, ews_certificate_number,
     } = req.body;
-    if (!name || !email || !class_id || !roll_number)
-      return res.status(400).json({ message: 'Name, email, class, and roll number are required' });
+    if (!name || !username || !class_id || !roll_number)
+      return res.status(400).json({ message: 'Name, username (admission number), class, and roll number are required' });
 
-    if (await User.findOne({ where: { email } }))
+    if (await User.findOne({ where: { username } }))
+      return res.status(409).json({ message: `Username (admission number) ${username} already exists` });
+
+    if (email && await User.findOne({ where: { email } }))
       return res.status(409).json({ message: 'Email already registered' });
 
     if (!await Class.findByPk(class_id))
@@ -51,8 +55,17 @@ const addStudent = async (req, res) => {
     if (await Student.findOne({ where: { class_id, roll_number } }))
       return res.status(409).json({ message: `Roll number ${roll_number} already exists in this class` });
 
-    const hashedPassword = await bcrypt.hash(password || 'student123', 10);
-    const user = await User.create({ name, email, password: hashedPassword, role: 'student', phone: phone || null }, { transaction: t });
+    // Default password = birth year + first 4 letters of name (e.g. "2003shik").
+    // A date_of_birth is required to derive it unless an explicit password is given.
+    let plainPassword = password;
+    if (!plainPassword) {
+      if (!date_of_birth)
+        return res.status(400).json({ message: 'date_of_birth is required to generate the default password' });
+      plainPassword = generateStudentPassword(name, date_of_birth);
+    }
+
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
+    const user = await User.create({ name, username, email: email || null, password: hashedPassword, role: 'student', phone: phone || null }, { transaction: t });
     const student = await Student.create({
       user_id: user.id, class_id, roll_number,
       date_of_birth: date_of_birth || null,
@@ -229,14 +242,18 @@ const getAllTeachers = async (req, res) => {
 const addTeacher = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { name, email, phone, password, subject, salary, joining_date } = req.body;
-    if (!name || !email) return res.status(400).json({ message: 'name and email are required' });
+    const { name, username, email, phone, password, subject, salary, joining_date } = req.body;
+    if (!name || !username || !password)
+      return res.status(400).json({ message: 'name, username (teacher ID), and password are required' });
 
-    if (await User.findOne({ where: { email } }))
+    if (await User.findOne({ where: { username } }))
+      return res.status(409).json({ message: `Username (teacher ID) ${username} already exists` });
+
+    if (email && await User.findOne({ where: { email } }))
       return res.status(409).json({ message: 'Email already registered' });
 
-    const hashedPassword = await bcrypt.hash(password || 'teacher123', 10);
-    const user = await User.create({ name, email, password: hashedPassword, role: 'teacher', phone: phone || null }, { transaction: t });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({ name, username, email: email || null, password: hashedPassword, role: 'teacher', phone: phone || null }, { transaction: t });
     const teacher = await Teacher.create({
       user_id: user.id,
       subject: subject || null,

@@ -10,15 +10,7 @@ const classTaskController = require('../controllers/classTaskController');
 const feeController = require('../controllers/feeController');
 const marksController = require('../controllers/marksController');
 
-// Dev bypass: inject first student user so controllers can use req.user.id
-router.use(async (req, res, next) => {
-  try {
-    req.user = await User.findOne({ where: { role: 'student' } });
-    next();
-  } catch (err) {
-    next(err);
-  }
-});
+// req.user is set by the authenticate middleware mounted in app.js.
 
 router.get('/attendance', getMyAttendance);
 router.get('/attendance/summary', getAttendanceSummary);
