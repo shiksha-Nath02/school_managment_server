@@ -10,7 +10,9 @@ const {
   updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary,
   getSelfAttendanceSetting, toggleSelfAttendance,
 } = require('../controllers/adminController');
+const { getDashboard } = require('../controllers/dashboardController');
 
+router.get('/dashboard', getDashboard);
 router.get('/classes', getClasses);
 
 // Self-attendance settings
