@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
 const { User, Student, Teacher, Class, TeacherAttendance, Attendance, Mark, StudentFee, FeePayment, Inventory, InventoryTransaction, Session, Timetable, UniformTransaction, UniformItem, UniformPayment, BookTransaction, BookItem, BookPayment, sequelize } = require('../models');
 const { saveBase64Image } = require('../utils/imageHelper');
+const { publicUrl } = require('../utils/s3');
 const { generateStudentPassword } = require('../utils/credentials');
 const selfAttendanceSettings = require('../utils/selfAttendanceSettings');
 
@@ -19,9 +20,9 @@ const formatRecord = (r) => ({
   date: r.date,
   status: r.status,
   checkInTime: r.check_in_time,
-  checkInImage: r.check_in_image || null,
+  checkInImage: publicUrl(r.check_in_image),
   checkOutTime: r.check_out_time,
-  checkOutImage: r.check_out_image || null,
+  checkOutImage: publicUrl(r.check_out_image),
   leaveType: r.leave_type,
   remarks: r.remarks,
   isVerified: r.is_verified || false,
@@ -371,7 +372,7 @@ const checkInTeacher = async (req, res) => {
 
     let imagePath = null;
     if (image_base64) {
-      imagePath = saveBase64Image(image_base64, `checkin_${teacherId}_${today}.jpg`);
+      imagePath = await saveBase64Image(image_base64, `checkin_${teacherId}_${today}.jpg`);
     }
 
     const record = await TeacherAttendance.create({
@@ -407,7 +408,7 @@ const checkOutTeacher = async (req, res) => {
 
     let imagePath = null;
     if (image_base64) {
-      imagePath = saveBase64Image(image_base64, `checkout_${teacherId}_${today}.jpg`);
+      imagePath = await saveBase64Image(image_base64, `checkout_${teacherId}_${today}.jpg`);
     }
 
     await record.update({ check_out_time: checkOutTime, status: newStatus, check_out_image: imagePath });

@@ -1,23 +1,40 @@
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 
-const UPLOAD_DIR = path.join(__dirname, '../../uploads/student-docs');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+// In-memory storage: the file lands in req.file.buffer so we can compress it
+// and PutObject to S3 without ever touching local disk.
+const storage = multer.memoryStorage();
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const safe = `student_${req.params.studentId}_${req.params.docType}_${Date.now()}${ext}`;
-    cb(null, safe);
-  },
-});
+const LIMITS = { fileSize: 10 * 1024 * 1024 }; // 10MB
 
-const fileFilter = (req, file, cb) => {
-  const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
+const IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png'];
+const PDF_TYPE = 'application/pdf';
+
+const filter = (allowed, label) => (req, file, cb) => {
   if (allowed.includes(file.mimetype)) cb(null, true);
-  else cb(new Error('Only JPEG, PNG, and PDF files are allowed'), false);
+  else cb(new Error(`Only ${label} files are allowed`), false);
 };
 
-module.exports = multer({ storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024 } });
+// Student docs: images (compressed) or PDFs (size-capped).
+const docUpload = multer({
+  storage,
+  limits: LIMITS,
+  fileFilter: filter([...IMAGE_TYPES, PDF_TYPE], 'JPEG, PNG, and PDF'),
+});
+
+// Gallery: images only.
+const imageUpload = multer({
+  storage,
+  limits: LIMITS,
+  fileFilter: filter(IMAGE_TYPES, 'JPEG and PNG'),
+});
+
+// Circulars: PDF only.
+const pdfUpload = multer({
+  storage,
+  limits: LIMITS,
+  fileFilter: filter([PDF_TYPE], 'PDF'),
+});
+
+module.exports = docUpload;
+module.exports.imageUpload = imageUpload;
+module.exports.pdfUpload = pdfUpload;

@@ -1,19 +1,11 @@
-const path = require('path');
-const fs = require('fs');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const { User, Student, Teacher, Class, Attendance } = require('../models');
 const TeacherAttendance = require('../models/TeacherAttendance');
+const { saveBase64Image } = require('../utils/imageHelper');
+const { publicUrl } = require('../utils/s3');
 
 const LATE_THRESHOLD = { hour: 9, minute: 30 };
-
-function saveBase64Image(base64Data, filename) {
-  const dir = path.join(__dirname, '../../uploads/attendance');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const data = base64Data.replace(/^data:image\/\w+;base64,/, '');
-  fs.writeFileSync(path.join(dir, filename), Buffer.from(data, 'base64'));
-  return `uploads/attendance/${filename}`;
-}
 
 // GET /api/teacher/classes
 // Returns classes assigned to the logged-in teacher (via class_teacher_id)
@@ -223,8 +215,8 @@ const getMyAttendanceRecords = async (req, res) => {
 
     const mapRecord = (r) => ({
       id: r.id, date: r.date, status: r.status,
-      checkInTime: r.check_in_time, checkInImage: r.check_in_image || null,
-      checkOutTime: r.check_out_time, checkOutImage: r.check_out_image || null,
+      checkInTime: r.check_in_time, checkInImage: publicUrl(r.check_in_image),
+      checkOutTime: r.check_out_time, checkOutImage: publicUrl(r.check_out_image),
       leaveType: r.leave_type, remarks: r.remarks,
       isVerified: r.is_verified || false,
     });
@@ -257,7 +249,7 @@ const selfCheckIn = async (req, res) => {
 
     let imagePath = null;
     if (image_base64) {
-      imagePath = saveBase64Image(image_base64, `checkin_${teacher.id}_${Date.now()}.jpg`);
+      imagePath = await saveBase64Image(image_base64, `checkin_${teacher.id}_${Date.now()}.jpg`);
     }
 
     let record;
@@ -276,7 +268,7 @@ const selfCheckIn = async (req, res) => {
       message: `Checked in as ${record.status}. Pending admin verification.`,
       record: {
         id: record.id, status: record.status,
-        checkInTime: record.check_in_time, checkInImage: record.check_in_image,
+        checkInTime: record.check_in_time, checkInImage: publicUrl(record.check_in_image),
         isVerified: record.is_verified,
       },
     });
@@ -301,7 +293,7 @@ const selfCheckOut = async (req, res) => {
 
     let imagePath = null;
     if (image_base64) {
-      imagePath = saveBase64Image(image_base64, `checkout_${teacher.id}_${Date.now()}.jpg`);
+      imagePath = await saveBase64Image(image_base64, `checkout_${teacher.id}_${Date.now()}.jpg`);
     }
 
     const [ciH, ciM] = record.check_in_time.split(':').map(Number);
@@ -315,8 +307,8 @@ const selfCheckOut = async (req, res) => {
       message: `Checked out${totalMinutes < 240 ? ' — half day recorded' : ''}. Pending admin verification.`,
       record: {
         id: record.id, status: record.status,
-        checkInTime: record.check_in_time, checkInImage: record.check_in_image,
-        checkOutTime: record.check_out_time, checkOutImage: record.check_out_image,
+        checkInTime: record.check_in_time, checkInImage: publicUrl(record.check_in_image),
+        checkOutTime: record.check_out_time, checkOutImage: publicUrl(record.check_out_image),
         isVerified: record.is_verified,
       },
     });

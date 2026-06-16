@@ -22,6 +22,8 @@ const BookTransaction = require('./BookTransaction');
 const BookPayment = require('./BookPayment');
 const Expense = require('./Expense');
 const StudentDocument = require('./StudentDocument');
+const GalleryImage = require('./GalleryImage');
+const Circular = require('./Circular');
 
 // ===== ASSOCIATIONS =====
 
@@ -133,4 +135,6 @@ module.exports = {
   BookPayment,
   Expense,
   StudentDocument,
+  GalleryImage,
+  Circular,
 };
