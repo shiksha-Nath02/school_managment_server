@@ -880,7 +880,35 @@ const getTeacherClassesById = async (req, res) => {
   }
 };
 
+// PUT /api/admin/users/:userId/reset-password
+// Super admin sets a new password for any user without knowing the old one.
+// (Route is gated to superadmin in routes/admin.js.)
+const resetUserPassword = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    res.json({ message: `Password reset for ${user.name}` });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
+  resetUserPassword,
   addStudent, getStudents, getStudentById, updateStudent, removeStudent, getClasses,
   getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory,
   getTeacherAttendanceById, getTeacherClassesById,

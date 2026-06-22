@@ -42,16 +42,35 @@ async function seed() {
     if (!adminExists) {
       const hashedPassword = await bcrypt.hash('admin123', 10);
       await User.create({
-        name: 'Admin User',
+        name: 'Super Admin',
         username: 'admin',
         email: 'admin@school.com',
         password: hashedPassword,
-        role: 'admin',
+        role: 'superadmin',
         phone: '+91 99999 00001',
       });
-      console.log('✅ Admin user created');
+      console.log('✅ Super admin user created');
     } else {
       console.log('ℹ️  Admin user already exists, skipping');
+    }
+
+    // ─────────────────────────────────────
+    // 2b. RESTRICTED ADMIN USER (no Session Setup / Profit tabs)
+    // ─────────────────────────────────────
+    const staffAdminExists = await User.findOne({ where: { username: 'staffadmin' } });
+    if (!staffAdminExists) {
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      await User.create({
+        name: 'Staff Admin',
+        username: 'staffadmin',
+        email: 'staffadmin@school.com',
+        password: hashedPassword,
+        role: 'admin',
+        phone: '+91 99999 00002',
+      });
+      console.log('✅ Restricted admin user created');
+    } else {
+      console.log('ℹ️  Restricted admin user already exists, skipping');
     }
 
     // ─────────────────────────────────────
@@ -157,13 +176,14 @@ async function seed() {
     // DONE
     // ─────────────────────────────────────
     console.log('\n🎉 Seed complete! Here are your login credentials (login by username):\n');
-    console.log('┌──────────┬────────────┬─────────────┐');
-    console.log('│  Role    │  Username  │  Password   │');
-    console.log('├──────────┼────────────┼─────────────┤');
-    console.log('│  Admin   │  admin     │  admin123   │');
-    console.log('│  Teacher │  T001      │  teacher123 │');
-    console.log('│  Student │  ADM001    │  2011rahu   │');
-    console.log('└──────────┴────────────┴─────────────┘');
+    console.log('┌────────────┬────────────┬─────────────┐');
+    console.log('│  Role      │  Username  │  Password   │');
+    console.log('├────────────┼────────────┼─────────────┤');
+    console.log('│  SuperAdmin│  admin     │  admin123   │');
+    console.log('│  Admin     │  staffadmin│  admin123   │');
+    console.log('│  Teacher   │  T001      │  teacher123 │');
+    console.log('│  Student   │  ADM001    │  2011rahu   │');
+    console.log('└────────────┴────────────┴─────────────┘');
     console.log('');
 
     process.exit(0);

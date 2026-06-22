@@ -32,7 +32,9 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/public", publicRoutes);
 
-const adminOnly = [authenticate, authorize("admin")];
+// Super admin has the full admin surface; regular admin is the same set of
+// APIs minus the tabs hidden in the UI. Both roles are allowed here.
+const adminOnly = [authenticate, authorize("admin", "superadmin")];
 app.use("/api/admin", adminOnly, adminRoutes);
 app.use("/api/admin", adminOnly, feeRoutes);
 app.use("/api/admin", adminOnly, inventoryRoutes);

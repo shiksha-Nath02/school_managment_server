@@ -9,11 +9,16 @@ const {
   checkInTeacher, checkOutTeacher, markTeacherStatus,
   updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary,
   getSelfAttendanceSetting, toggleSelfAttendance,
+  resetUserPassword,
 } = require('../controllers/adminController');
 const { getDashboard } = require('../controllers/dashboardController');
+const { authorize } = require('../middlewares/auth');
 
 router.get('/dashboard', getDashboard);
 router.get('/classes', getClasses);
+
+// Reset another user's password — super admin only.
+router.put('/users/:userId/reset-password', authorize('superadmin'), resetUserPassword);
 
 // Self-attendance settings
 router.get('/settings/self-attendance', getSelfAttendanceSetting);
