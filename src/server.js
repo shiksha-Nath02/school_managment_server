@@ -1,3 +1,8 @@
+// Pin the process to IST so date/time logic (attendance check-in, late
+// detection, dashboard "today") is correct regardless of the host clock (EC2
+// defaults to UTC). Must run before any Date is created.
+process.env.TZ = process.env.TZ || "Asia/Kolkata";
+
 require("dotenv").config();
 const app = require("./app");
 const { sequelize } = require("./models");

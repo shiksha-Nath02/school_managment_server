@@ -4,19 +4,17 @@ const { User } = require('../models');
 const {
   getMyAttendance,
   getAttendanceSummary,
+  getMyProfile,
 } = require('../controllers/studentController');
 const timetableController = require('../controllers/timetableController');
 const classTaskController = require('../controllers/classTaskController');
+const feeController = require('../controllers/feeController');
+const marksController = require('../controllers/marksController');
 
-// Dev bypass: inject first student user so controllers can use req.user.id
-router.use(async (req, res, next) => {
-  try {
-    req.user = await User.findOne({ where: { role: 'student' } });
-    next();
-  } catch (err) {
-    next(err);
-  }
-});
+// req.user is set by the authenticate middleware mounted in app.js.
+
+// Profile (personal info + headline stats)
+router.get('/profile', getMyProfile);
 
 router.get('/attendance', getMyAttendance);
 router.get('/attendance/summary', getAttendanceSummary);
@@ -27,5 +25,11 @@ router.get('/timetable', timetableController.getStudentTimetable);
 // Classwork/Homework — specific path before param route
 router.get('/class-tasks/week', classTaskController.getStudentWeekTasks);
 router.get('/class-tasks', classTaskController.getStudentClassTasks);
+
+// Fee history
+router.get('/fee-history', feeController.getMyFeeHistory);
+
+// Results
+router.get('/results', marksController.getOwnResults);
 
 module.exports = router;

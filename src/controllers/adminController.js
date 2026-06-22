@@ -1,6 +1,15 @@
 const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
-const { User, Student, Teacher, Class, TeacherAttendance, sequelize } = require('../models');
+const { User, Student, Teacher, Class, TeacherAttendance, Attendance, Mark, StudentFee, FeePayment, Inventory, InventoryTransaction, Session, Timetable, UniformTransaction, UniformItem, UniformPayment, BookTransaction, BookItem, BookPayment, sequelize } = require('../models');
+const { saveBase64Image } = require('../utils/imageHelper');
+const { publicUrl } = require('../utils/s3');
+const { generateStudentPassword } = require('../utils/credentials');
+const selfAttendanceSettings = require('../utils/selfAttendanceSettings');
+
+const studentIncludes = [
+  { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'is_active'] },
+  { model: Class, as: 'class', attributes: ['id', 'class_name', 'section'] },
+];
 
 const LATE_THRESHOLD = { hour: 9, minute: 30 }; // 9:30 AM
 
@@ -11,20 +20,34 @@ const formatRecord = (r) => ({
   date: r.date,
   status: r.status,
   checkInTime: r.check_in_time,
+  checkInImage: publicUrl(r.check_in_image),
   checkOutTime: r.check_out_time,
+  checkOutImage: publicUrl(r.check_out_image),
   leaveType: r.leave_type,
   remarks: r.remarks,
+  isVerified: r.is_verified || false,
+  verifiedAt: r.verified_at || null,
 });
 
 // ─────────── STUDENTS ───────────
 const addStudent = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { name, email, phone, password, class_id, roll_number, date_of_birth, address, admission_date } = req.body;
-    if (!name || !email || !class_id || !roll_number)
-      return res.status(400).json({ message: 'Name, email, class, and roll number are required' });
+    const {
+      name, username, email, phone, password, class_id, roll_number, date_of_birth, address, admission_date,
+      aadhaar_number, blood_group, category, religion, nationality,
+      city, state, pincode,
+      father_name, father_phone, father_aadhaar,
+      mother_name, mother_phone, mother_aadhaar,
+      parents_pan, birth_certificate_number, ews_certificate_number,
+    } = req.body;
+    if (!name || !username || !class_id || !roll_number)
+      return res.status(400).json({ message: 'Name, username (admission number), class, and roll number are required' });
 
-    if (await User.findOne({ where: { email } }))
+    if (await User.findOne({ where: { username } }))
+      return res.status(409).json({ message: `Username (admission number) ${username} already exists` });
+
+    if (email && await User.findOne({ where: { email } }))
       return res.status(409).json({ message: 'Email already registered' });
 
     if (!await Class.findByPk(class_id))
@@ -33,9 +56,40 @@ const addStudent = async (req, res) => {
     if (await Student.findOne({ where: { class_id, roll_number } }))
       return res.status(409).json({ message: `Roll number ${roll_number} already exists in this class` });
 
-    const hashedPassword = await bcrypt.hash(password || 'student123', 10);
-    const user = await User.create({ name, email, password: hashedPassword, role: 'student', phone: phone || null }, { transaction: t });
-    const student = await Student.create({ user_id: user.id, class_id, roll_number, date_of_birth: date_of_birth || null, address: address || null, admission_date: admission_date || new Date() }, { transaction: t });
+    // Default password = birth year + first 4 letters of name (e.g. "2003shik").
+    // A date_of_birth is required to derive it unless an explicit password is given.
+    let plainPassword = password;
+    if (!plainPassword) {
+      if (!date_of_birth)
+        return res.status(400).json({ message: 'date_of_birth is required to generate the default password' });
+      plainPassword = generateStudentPassword(name, date_of_birth);
+    }
+
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
+    const user = await User.create({ name, username, email: email || null, password: hashedPassword, role: 'student', phone: phone || null }, { transaction: t });
+    const student = await Student.create({
+      user_id: user.id, class_id, roll_number,
+      date_of_birth: date_of_birth || null,
+      address: address || null,
+      admission_date: admission_date || new Date(),
+      aadhaar_number: aadhaar_number || null,
+      blood_group: blood_group || null,
+      category: category || null,
+      religion: religion || null,
+      nationality: nationality || 'Indian',
+      city: city || null,
+      state: state || null,
+      pincode: pincode || null,
+      father_name: father_name || null,
+      father_phone: father_phone || null,
+      father_aadhaar: father_aadhaar || null,
+      mother_name: mother_name || null,
+      mother_phone: mother_phone || null,
+      mother_aadhaar: mother_aadhaar || null,
+      parents_pan: parents_pan || null,
+      birth_certificate_number: birth_certificate_number || null,
+      ews_certificate_number: ews_certificate_number || null,
+    }, { transaction: t });
     await t.commit();
 
     const fullStudent = await Student.findByPk(student.id, {
@@ -56,7 +110,7 @@ const getStudents = async (req, res) => {
   try {
     const { class_id, search } = req.query;
     const where = {};
-    if (class_id) where.class_id = class_id;
+    if (class_id) where.class_id = parseInt(class_id, 10);
     const students = await Student.findAll({
       where,
       include: [
@@ -87,6 +141,82 @@ const getStudentById = async (req, res) => {
   }
 };
 
+const updateStudent = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const student = await Student.findByPk(req.params.id, { include: [{ model: User, as: 'user' }] });
+    if (!student) { await t.rollback(); return res.status(404).json({ message: 'Student not found' }); }
+
+    const { name, email, phone, password, class_id, roll_number, date_of_birth, address, admission_date } = req.body;
+
+    if (email && email !== student.user.email && await User.findOne({ where: { email, id: { [Op.ne]: student.user_id } } })) {
+      await t.rollback();
+      return res.status(409).json({ message: 'Email already in use' });
+    }
+    if (class_id && roll_number) {
+      const conflict = await Student.findOne({ where: { class_id, roll_number, id: { [Op.ne]: student.id } } });
+      if (conflict) { await t.rollback(); return res.status(409).json({ message: `Roll number ${roll_number} already exists in this class` }); }
+    }
+    if (class_id && !await Class.findByPk(class_id)) {
+      await t.rollback();
+      return res.status(404).json({ message: 'Class not found' });
+    }
+
+    const userUpdates = {};
+    if (name !== undefined) userUpdates.name = name;
+    if (email !== undefined) userUpdates.email = email;
+    if (phone !== undefined) userUpdates.phone = phone;
+    if (password) userUpdates.password = await bcrypt.hash(password, 10);
+
+    const studentUpdates = {};
+    if (class_id !== undefined) studentUpdates.class_id = class_id;
+    if (roll_number !== undefined) studentUpdates.roll_number = roll_number;
+    if (date_of_birth !== undefined) studentUpdates.date_of_birth = date_of_birth;
+    if (address !== undefined) studentUpdates.address = address;
+    if (admission_date !== undefined) studentUpdates.admission_date = admission_date;
+
+    const extendedFields = [
+      'aadhaar_number', 'father_name', 'father_phone', 'father_aadhaar',
+      'mother_name', 'mother_phone', 'mother_aadhaar', 'parents_pan',
+      'category', 'religion', 'nationality', 'blood_group',
+      'birth_certificate_number', 'ews_certificate_number',
+      'pincode', 'city', 'state',
+    ];
+    for (const field of extendedFields) {
+      if (req.body[field] !== undefined) studentUpdates[field] = req.body[field] || null;
+    }
+
+    if (Object.keys(userUpdates).length) await student.user.update(userUpdates, { transaction: t });
+    if (Object.keys(studentUpdates).length) await student.update(studentUpdates, { transaction: t });
+    await t.commit();
+
+    const updated = await Student.findByPk(student.id, { include: studentIncludes });
+    res.json({ message: 'Student updated', student: updated });
+  } catch (error) {
+    await t.rollback();
+    console.error('Update student error:', error);
+    res.status(500).json({ message: 'Failed to update student' });
+  }
+};
+
+const removeStudent = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const student = await Student.findByPk(req.params.id, { include: [{ model: User, as: 'user' }] });
+    if (!student) { await t.rollback(); return res.status(404).json({ message: 'Student not found' }); }
+    if (student.status === 'inactive') { await t.rollback(); return res.status(400).json({ message: 'Student is already inactive' }); }
+
+    await student.update({ status: 'inactive' }, { transaction: t });
+    await student.user.update({ is_active: false }, { transaction: t });
+    await t.commit();
+    res.json({ message: 'Student removed (marked inactive)', studentId: student.id });
+  } catch (error) {
+    await t.rollback();
+    console.error('Remove student error:', error);
+    res.status(500).json({ message: 'Failed to remove student' });
+  }
+};
+
 const getClasses = async (req, res) => {
   try {
     const classes = await Class.findAll({ attributes: ['id', 'class_name', 'section'], order: [['class_name', 'ASC'], ['section', 'ASC']] });
@@ -100,13 +230,103 @@ const getClasses = async (req, res) => {
 const getAllTeachers = async (req, res) => {
   try {
     const teachers = await Teacher.findAll({
-      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] }],
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'is_active'], where: { is_active: true } }],
       order: [['id', 'ASC']],
     });
     res.json({ teachers });
   } catch (error) {
     console.error('Get teachers error:', error);
     res.status(500).json({ message: 'Failed to fetch teachers' });
+  }
+};
+
+const addTeacher = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { name, username, email, phone, password, subject, salary, joining_date } = req.body;
+    if (!name || !username || !password)
+      return res.status(400).json({ message: 'name, username (teacher ID), and password are required' });
+
+    if (await User.findOne({ where: { username } }))
+      return res.status(409).json({ message: `Username (teacher ID) ${username} already exists` });
+
+    if (email && await User.findOne({ where: { email } }))
+      return res.status(409).json({ message: 'Email already registered' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({ name, username, email: email || null, password: hashedPassword, role: 'teacher', phone: phone || null }, { transaction: t });
+    const teacher = await Teacher.create({
+      user_id: user.id,
+      subject: subject || null,
+      salary: salary || null,
+      joining_date: joining_date || null,
+    }, { transaction: t });
+    await t.commit();
+
+    const full = await Teacher.findByPk(teacher.id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] }],
+    });
+    res.status(201).json({ message: 'Teacher added successfully', teacher: full });
+  } catch (error) {
+    await t.rollback();
+    console.error('Add teacher error:', error);
+    res.status(500).json({ message: 'Failed to add teacher' });
+  }
+};
+
+const updateTeacher = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const teacher = await Teacher.findByPk(req.params.id, { include: [{ model: User, as: 'user' }] });
+    if (!teacher) { await t.rollback(); return res.status(404).json({ message: 'Teacher not found' }); }
+
+    const { name, email, phone, password, subject, salary, joining_date } = req.body;
+
+    if (email && email !== teacher.user.email && await User.findOne({ where: { email, id: { [Op.ne]: teacher.user_id } } })) {
+      await t.rollback();
+      return res.status(409).json({ message: 'Email already in use' });
+    }
+
+    const userUpdates = {};
+    if (name !== undefined) userUpdates.name = name;
+    if (email !== undefined) userUpdates.email = email;
+    if (phone !== undefined) userUpdates.phone = phone;
+    if (password) userUpdates.password = await bcrypt.hash(password, 10);
+
+    const teacherUpdates = {};
+    if (subject !== undefined) teacherUpdates.subject = subject;
+    if (salary !== undefined) teacherUpdates.salary = salary;
+    if (joining_date !== undefined) teacherUpdates.joining_date = joining_date;
+
+    if (Object.keys(userUpdates).length) await teacher.user.update(userUpdates, { transaction: t });
+    if (Object.keys(teacherUpdates).length) await teacher.update(teacherUpdates, { transaction: t });
+    await t.commit();
+
+    const updated = await Teacher.findByPk(teacher.id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] }],
+    });
+    res.json({ message: 'Teacher updated', teacher: updated });
+  } catch (error) {
+    await t.rollback();
+    console.error('Update teacher error:', error);
+    res.status(500).json({ message: 'Failed to update teacher' });
+  }
+};
+
+const removeTeacher = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const teacher = await Teacher.findByPk(req.params.id, { include: [{ model: User, as: 'user' }] });
+    if (!teacher) { await t.rollback(); return res.status(404).json({ message: 'Teacher not found' }); }
+    if (!teacher.user.is_active) { await t.rollback(); return res.status(400).json({ message: 'Teacher is already inactive' }); }
+
+    await teacher.user.update({ is_active: false }, { transaction: t });
+    await t.commit();
+    res.json({ message: 'Teacher removed (marked inactive)', teacherId: teacher.id });
+  } catch (error) {
+    await t.rollback();
+    console.error('Remove teacher error:', error);
+    res.status(500).json({ message: 'Failed to remove teacher' });
   }
 };
 
@@ -137,7 +357,7 @@ const getTeacherAttendance = async (req, res) => {
 // ─────────── TEACHER ATTENDANCE — WRITE ───────────
 const checkInTeacher = async (req, res) => {
   try {
-    const { teacherId } = req.body;
+    const { teacherId, image_base64 } = req.body;
     const today = new Date().toISOString().split('T')[0];
     const checkInTime = new Date().toTimeString().slice(0, 8); // HH:MM:SS
 
@@ -150,11 +370,18 @@ const checkInTeacher = async (req, res) => {
     const [h, m] = checkInTime.split(':').map(Number);
     const isLate = h > LATE_THRESHOLD.hour || (h === LATE_THRESHOLD.hour && m > LATE_THRESHOLD.minute);
 
+    let imagePath = null;
+    if (image_base64) {
+      imagePath = await saveBase64Image(image_base64, `checkin_${teacherId}_${today}.jpg`);
+    }
+
     const record = await TeacherAttendance.create({
       teacher_id: teacherId,
       date: today,
       status: isLate ? 'late' : 'present',
       check_in_time: checkInTime,
+      check_in_image: imagePath,
+      is_verified: false,
     });
 
     res.json({ message: `Checked in as ${record.status}`, record: formatRecord(record) });
@@ -166,7 +393,7 @@ const checkInTeacher = async (req, res) => {
 
 const checkOutTeacher = async (req, res) => {
   try {
-    const { teacherId } = req.body;
+    const { teacherId, image_base64 } = req.body;
     const today = new Date().toISOString().split('T')[0];
     const checkOutTime = new Date().toTimeString().slice(0, 8);
 
@@ -179,12 +406,33 @@ const checkOutTeacher = async (req, res) => {
     const totalMinutes = (coH * 60 + coM) - (ciH * 60 + ciM);
     const newStatus = totalMinutes < 240 ? 'half_day' : record.status;
 
-    await record.update({ check_out_time: checkOutTime, status: newStatus });
+    let imagePath = null;
+    if (image_base64) {
+      imagePath = await saveBase64Image(image_base64, `checkout_${teacherId}_${today}.jpg`);
+    }
+
+    await record.update({ check_out_time: checkOutTime, status: newStatus, check_out_image: imagePath });
+    await record.reload();
     res.json({ message: 'Checked out', record: formatRecord(record), halfDay: totalMinutes < 240 });
   } catch (error) {
     console.error('Check out error:', error);
     res.status(500).json({ message: 'Failed to check out' });
   }
+};
+
+// ─────────── SELF-ATTENDANCE SETTINGS ───────────
+const getSelfAttendanceSetting = (req, res) => {
+  const today = new Date().toISOString().split('T')[0];
+  const date = req.query.date || today;
+  res.json({ date, enabled: selfAttendanceSettings.isEnabled(date) });
+};
+
+const toggleSelfAttendance = (req, res) => {
+  const today = new Date().toISOString().split('T')[0];
+  const date = req.body.date || today;
+  const { enabled } = req.body;
+  selfAttendanceSettings.setEnabled(date, enabled);
+  res.json({ date, enabled: selfAttendanceSettings.isEnabled(date) });
 };
 
 const markTeacherStatus = async (req, res) => {
@@ -286,6 +534,214 @@ const getTeacherAttendanceSummary = async (req, res) => {
   }
 };
 
+// ─────────── STUDENT PROFILE — DETAIL ENDPOINTS ───────────
+
+const getStudentAttendance = async (req, res) => {
+  try {
+    const student = await Student.findByPk(req.params.id);
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+
+    const { year } = req.query;
+    const targetYear = parseInt(year) || new Date().getFullYear();
+
+    const startDate = `${targetYear}-01-01`;
+    const endDate = `${targetYear}-12-31`;
+
+    const records = await Attendance.findAll({
+      where: { student_id: student.id, date: { [Op.between]: [startDate, endDate] } },
+      order: [['date', 'ASC']],
+    });
+
+    const monthlyBreakdown = {};
+    for (let m = 1; m <= 12; m++) {
+      monthlyBreakdown[m] = { present: 0, absent: 0, total: 0 };
+    }
+
+    let totalPresent = 0;
+    let totalAbsent = 0;
+
+    for (const r of records) {
+      const month = new Date(r.date).getMonth() + 1;
+      if (r.status === 'present') { monthlyBreakdown[month].present++; totalPresent++; }
+      else { monthlyBreakdown[month].absent++; totalAbsent++; }
+      monthlyBreakdown[month].total++;
+    }
+
+    const totalDays = totalPresent + totalAbsent;
+    res.json({
+      studentId: student.id,
+      year: targetYear,
+      totalDays,
+      presentDays: totalPresent,
+      absentDays: totalAbsent,
+      percentage: totalDays ? Math.round((totalPresent / totalDays) * 100) : 0,
+      monthlyBreakdown,
+      records: records.map((r) => ({ date: r.date, status: r.status })),
+    });
+  } catch (error) {
+    console.error('Get student attendance error:', error);
+    res.status(500).json({ message: 'Failed to fetch attendance' });
+  }
+};
+
+const getStudentMarks = async (req, res) => {
+  try {
+    const student = await Student.findByPk(req.params.id);
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+
+    const marks = await Mark.findAll({
+      where: { student_id: student.id },
+      order: [['exam_type', 'ASC'], ['subject', 'ASC']],
+    });
+
+    // Group by exam_type
+    const byExam = {};
+    for (const m of marks) {
+      if (!byExam[m.exam_type]) byExam[m.exam_type] = { examType: m.exam_type, subjects: [], totalObtained: 0, totalMax: 0 };
+      const obtained = m.is_absent ? null : parseFloat(m.marks_obtained);
+      byExam[m.exam_type].subjects.push({
+        subject: m.subject,
+        marksObtained: obtained,
+        maxMarks: m.max_marks,
+        isAbsent: m.is_absent,
+        remark: m.remark,
+        percentage: (!m.is_absent && obtained !== null) ? Math.round((obtained / m.max_marks) * 100) : null,
+      });
+      if (!m.is_absent && obtained !== null) {
+        byExam[m.exam_type].totalObtained += obtained;
+        byExam[m.exam_type].totalMax += m.max_marks;
+      }
+    }
+
+    const exams = Object.values(byExam).map((e) => ({
+      ...e,
+      percentage: e.totalMax ? Math.round((e.totalObtained / e.totalMax) * 100) : null,
+    }));
+
+    res.json({ studentId: student.id, exams });
+  } catch (error) {
+    console.error('Get student marks error:', error);
+    res.status(500).json({ message: 'Failed to fetch marks' });
+  }
+};
+
+const getStudentFees = async (req, res) => {
+  try {
+    const student = await Student.findByPk(req.params.id);
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+
+    const [feeConfigs, payments] = await Promise.all([
+      StudentFee.findAll({
+        where: { student_id: student.id },
+        include: [{ model: Session, as: 'session', attributes: ['id', 'name', 'start_year', 'end_year'] }],
+        order: [['id', 'DESC']],
+      }),
+      FeePayment.findAll({
+        where: { student_id: student.id },
+        order: [['billing_year', 'DESC'], ['billing_month', 'DESC']],
+      }),
+    ]);
+
+    const totalPaid = payments
+      .filter((p) => !p.is_reversal)
+      .reduce((sum, p) => sum + parseFloat(p.amount_paid || 0), 0);
+
+    const totalPending = payments
+      .filter((p) => !p.is_reversal)
+      .reduce((sum, p) => sum + parseFloat(p.pending_after || 0), 0);
+
+    // Latest pending_after is the true outstanding
+    const latestPending = payments.length > 0 ? parseFloat(payments[0].pending_after || 0) : 0;
+
+    res.json({
+      studentId: student.id,
+      feeConfigs,
+      payments: payments.map((p) => ({
+        id: p.id,
+        billingMonth: p.billing_month,
+        billingYear: p.billing_year,
+        amountPaid: parseFloat(p.amount_paid),
+        fineAmount: parseFloat(p.fine_amount),
+        pendingAfter: parseFloat(p.pending_after),
+        paymentDate: p.payment_date,
+        paymentMethod: p.payment_method,
+        receiptNumber: p.receipt_number,
+        isReversal: p.is_reversal,
+        remarks: p.remarks,
+      })),
+      summary: { totalPaid, latestPending },
+    });
+  } catch (error) {
+    console.error('Get student fees error:', error);
+    res.status(500).json({ message: 'Failed to fetch fees' });
+  }
+};
+
+const getStudentInventory = async (req, res) => {
+  try {
+    const student = await Student.findByPk(req.params.id);
+    if (!student) return res.status(404).json({ message: 'Student not found' });
+
+    const admNo = String(student.id);
+
+    const [uniformTxns, bookTxns] = await Promise.all([
+      UniformTransaction.findAll({
+        where: { admission_number: admNo },
+        include: [
+          { model: UniformItem, as: 'item' },
+          { model: UniformPayment, as: 'payments', order: [['payment_date', 'ASC']] },
+        ],
+        order: [['created_at', 'DESC']],
+      }),
+      BookTransaction.findAll({
+        where: { admission_number: admNo },
+        include: [
+          { model: BookItem, as: 'item' },
+          { model: BookPayment, as: 'payments', order: [['payment_date', 'ASC']] },
+        ],
+        order: [['created_at', 'DESC']],
+      }),
+    ]);
+
+    const mapTxn = (t, type) => ({
+      id:          t.id,
+      type,
+      date:        t.created_at,
+      itemName:    type === 'uniform' ? `${t.item?.item_name || '—'} (${t.item?.size || '—'})` : (t.item?.book_name || '—'),
+      className:   type === 'book'    ? (t.item?.class_name || null) : null,
+      subject:     type === 'book'    ? (t.item?.subject    || null) : null,
+      quantity:    t.quantity,
+      toBePaid:    parseFloat(t.to_be_paid),
+      paid:        parseFloat(t.paid),
+      left:        parseFloat(t.to_be_paid) - parseFloat(t.paid),
+      payments:    (t.payments || []).map((p) => ({
+        id:          p.id,
+        amountPaid:  parseFloat(p.amount_paid),
+        paymentDate: p.payment_date,
+        remarks:     p.remarks,
+      })),
+    });
+
+    const transactions = [
+      ...uniformTxns.map((t) => mapTxn(t, 'uniform')),
+      ...bookTxns.map((t) => mapTxn(t, 'book')),
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    const totalSpent   = transactions.reduce((s, t) => s + t.paid,     0);
+    const totalPending = transactions.reduce((s, t) => s + t.left,     0);
+
+    res.json({
+      studentId:       student.id,
+      admissionNumber: admNo,
+      transactions,
+      summary: { totalTransactions: transactions.length, totalSpent, totalPending },
+    });
+  } catch (error) {
+    console.error('Get student inventory error:', error);
+    res.status(500).json({ message: 'Failed to fetch inventory' });
+  }
+};
+
 // Keep old bulk submit for backward compat
 const submitTeacherAttendance = async (req, res) => {
   const t = await sequelize.transaction();
@@ -306,10 +762,160 @@ const submitTeacherAttendance = async (req, res) => {
   }
 };
 
+// ─────────── TEACHER ATTENDANCE — VERIFY ───────────
+
+const verifyTeacherAttendance = async (req, res) => {
+  try {
+    const record = await TeacherAttendance.findByPk(req.params.id);
+    if (!record) return res.status(404).json({ message: 'Record not found' });
+
+    await record.update({ is_verified: true, verified_at: new Date() });
+    res.json({ message: 'Attendance verified', record: formatRecord(record) });
+  } catch (error) {
+    console.error('Verify attendance error:', error);
+    res.status(500).json({ message: 'Failed to verify attendance' });
+  }
+};
+
+// ─────────── TEACHER PROFILE — DETAIL ENDPOINTS ───────────
+
+const getTeacherAttendanceById = async (req, res) => {
+  try {
+    const teacher = await Teacher.findByPk(req.params.id);
+    if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+
+    const { year } = req.query;
+    const targetYear = parseInt(year) || new Date().getFullYear();
+    const startDate = `${targetYear}-01-01`;
+    const endDate = `${targetYear}-12-31`;
+
+    const records = await TeacherAttendance.findAll({
+      where: { teacher_id: teacher.id, date: { [Op.between]: [startDate, endDate] } },
+      order: [['date', 'ASC']],
+    });
+
+    const monthlyBreakdown = {};
+    for (let m = 1; m <= 12; m++) {
+      monthlyBreakdown[m] = { present: 0, late: 0, half_day: 0, absent: 0, on_leave: 0, official_duty: 0, total: 0 };
+    }
+
+    let counts = { present: 0, late: 0, half_day: 0, absent: 0, on_leave: 0, official_duty: 0 };
+
+    for (const r of records) {
+      const month = new Date(r.date).getMonth() + 1;
+      const s = r.status;
+      if (monthlyBreakdown[month][s] !== undefined) monthlyBreakdown[month][s]++;
+      if (counts[s] !== undefined) counts[s]++;
+      monthlyBreakdown[month].total++;
+    }
+
+    const totalDays = records.length;
+    const effectivePresent = counts.present + counts.late + counts.half_day + counts.official_duty;
+
+    res.json({
+      teacherId: teacher.id,
+      year: targetYear,
+      totalDays,
+      counts,
+      percentage: totalDays ? Math.round((effectivePresent / totalDays) * 100) : 0,
+      monthlyBreakdown,
+    });
+  } catch (error) {
+    console.error('Get teacher attendance error:', error);
+    res.status(500).json({ message: 'Failed to fetch attendance' });
+  }
+};
+
+const getTeacherClassesById = async (req, res) => {
+  try {
+    const teacher = await Teacher.findByPk(req.params.id, {
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] }],
+    });
+    if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+
+    // Classes where this teacher is the class teacher
+    const homeClasses = await Class.findAll({
+      where: { class_teacher_id: teacher.id },
+      attributes: ['id', 'class_name', 'section'],
+      include: [{ model: Student, as: 'students', attributes: ['id'] }],
+    });
+
+    // Timetable entries (unique class+subject combos this teacher teaches)
+    const timetableEntries = await Timetable.findAll({
+      where: { teacher_id: teacher.id },
+      include: [{ model: Class, as: 'class', attributes: ['id', 'class_name', 'section'] }],
+      order: [['class_id', 'ASC'], ['day', 'ASC'], ['period', 'ASC']],
+    });
+
+    // Group timetable by class
+    const timetableByClass = {};
+    for (const entry of timetableEntries) {
+      const classId = entry.class_id;
+      if (!timetableByClass[classId]) {
+        timetableByClass[classId] = {
+          classId,
+          className: entry.class ? `Class ${entry.class.class_name} ${entry.class.section}` : '—',
+          periods: [],
+        };
+      }
+      timetableByClass[classId].periods.push({
+        day: entry.day,
+        period: entry.period,
+        subject: entry.subject,
+      });
+    }
+
+    res.json({
+      teacherId: teacher.id,
+      homeClasses: homeClasses.map((c) => ({
+        id: c.id,
+        className: `Class ${c.class_name} ${c.section}`,
+        studentCount: c.students?.length || 0,
+      })),
+      timetableClasses: Object.values(timetableByClass),
+    });
+  } catch (error) {
+    console.error('Get teacher classes error:', error);
+    res.status(500).json({ message: 'Failed to fetch classes' });
+  }
+};
+
+// PUT /api/admin/users/:userId/reset-password
+// Super admin sets a new password for any user without knowing the old one.
+// (Route is gated to superadmin in routes/admin.js.)
+const resetUserPassword = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    res.json({ message: `Password reset for ${user.name}` });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
-  addStudent, getStudents, getStudentById, getClasses,
-  getAllTeachers,
+  resetUserPassword,
+  addStudent, getStudents, getStudentById, updateStudent, removeStudent, getClasses,
+  getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory,
+  getTeacherAttendanceById, getTeacherClassesById,
+  verifyTeacherAttendance,
+  getAllTeachers, addTeacher, updateTeacher, removeTeacher,
   getTeacherAttendance, submitTeacherAttendance,
   checkInTeacher, checkOutTeacher, markTeacherStatus,
   updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary,
+  getSelfAttendanceSetting, toggleSelfAttendance,
 };

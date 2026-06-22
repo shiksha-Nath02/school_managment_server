@@ -6,6 +6,7 @@
 
 const bcrypt = require('bcryptjs');
 const { sequelize, User, Student, Teacher, Class } = require('../models');
+const { generateStudentPassword } = require('./credentials');
 
 async function seed() {
   try {
@@ -37,25 +38,45 @@ async function seed() {
     // ─────────────────────────────────────
     // 2. ADMIN USER
     // ─────────────────────────────────────
-    const adminExists = await User.findOne({ where: { email: 'admin@school.com' } });
+    const adminExists = await User.findOne({ where: { username: 'admin' } });
     if (!adminExists) {
       const hashedPassword = await bcrypt.hash('admin123', 10);
       await User.create({
-        name: 'Admin User',
+        name: 'Super Admin',
+        username: 'admin',
         email: 'admin@school.com',
         password: hashedPassword,
-        role: 'admin',
+        role: 'superadmin',
         phone: '+91 99999 00001',
       });
-      console.log('✅ Admin user created');
+      console.log('✅ Super admin user created');
     } else {
       console.log('ℹ️  Admin user already exists, skipping');
     }
 
     // ─────────────────────────────────────
+    // 2b. RESTRICTED ADMIN USER (no Session Setup / Profit tabs)
+    // ─────────────────────────────────────
+    const staffAdminExists = await User.findOne({ where: { username: 'staffadmin' } });
+    if (!staffAdminExists) {
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      await User.create({
+        name: 'Staff Admin',
+        username: 'staffadmin',
+        email: 'staffadmin@school.com',
+        password: hashedPassword,
+        role: 'admin',
+        phone: '+91 99999 00002',
+      });
+      console.log('✅ Restricted admin user created');
+    } else {
+      console.log('ℹ️  Restricted admin user already exists, skipping');
+    }
+
+    // ─────────────────────────────────────
     // 3. TEACHER USER + TEACHER ROW
     // ─────────────────────────────────────
-    const teacherExists = await User.findOne({ where: { email: 'teacher@school.com' } });
+    const teacherExists = await User.findOne({ where: { username: 'T001' } });
     if (!teacherExists) {
       const t = await sequelize.transaction();
       try {
@@ -64,6 +85,7 @@ async function seed() {
         // Create user row
         const teacherUser = await User.create({
           name: 'Mrs. Priya Gupta',
+          username: 'T001',
           email: 'teacher@school.com',
           password: hashedPassword,
           role: 'teacher',
@@ -108,15 +130,17 @@ async function seed() {
     // ─────────────────────────────────────
     // 4. STUDENT USER + STUDENT ROW
     // ─────────────────────────────────────
-    const studentExists = await User.findOne({ where: { email: 'student@school.com' } });
+    const studentExists = await User.findOne({ where: { username: 'ADM001' } });
     if (!studentExists) {
       const t = await sequelize.transaction();
       try {
-        const hashedPassword = await bcrypt.hash('student123', 10);
+        // Default student password = birth year + first 4 letters of name.
+        const hashedPassword = await bcrypt.hash(generateStudentPassword('Rahul Sharma', '2011-03-15'), 10);
 
         // Create user row
         const studentUser = await User.create({
           name: 'Rahul Sharma',
+          username: 'ADM001',
           email: 'student@school.com',
           password: hashedPassword,
           role: 'student',
@@ -151,14 +175,15 @@ async function seed() {
     // ─────────────────────────────────────
     // DONE
     // ─────────────────────────────────────
-    console.log('\n🎉 Seed complete! Here are your login credentials:\n');
-    console.log('┌──────────┬────────────────────────┬─────────────┐');
-    console.log('│  Role    │  Email                 │  Password   │');
-    console.log('├──────────┼────────────────────────┼─────────────┤');
-    console.log('│  Admin   │  admin@school.com      │  admin123   │');
-    console.log('│  Teacher │  teacher@school.com    │  teacher123 │');
-    console.log('│  Student │  student@school.com    │  student123 │');
-    console.log('└──────────┴────────────────────────┴─────────────┘');
+    console.log('\n🎉 Seed complete! Here are your login credentials (login by username):\n');
+    console.log('┌────────────┬────────────┬─────────────┐');
+    console.log('│  Role      │  Username  │  Password   │');
+    console.log('├────────────┼────────────┼─────────────┤');
+    console.log('│  SuperAdmin│  admin     │  admin123   │');
+    console.log('│  Admin     │  staffadmin│  admin123   │');
+    console.log('│  Teacher   │  T001      │  teacher123 │');
+    console.log('│  Student   │  ADM001    │  2011rahu   │');
+    console.log('└────────────┴────────────┴─────────────┘');
     console.log('');
 
     process.exit(0);

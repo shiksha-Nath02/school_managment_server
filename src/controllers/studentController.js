@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
-const { User, Student, Class, Attendance } = require('../models');
+const { User, Student, Class, Attendance, Mark, FeePayment } = require('../models');
+const { calculateFine } = require('../utils/feeEngine');
 
 // GET /api/student/attendance?month=3&year=2026
 // Returns the logged-in student's attendance for a given month/year
@@ -141,7 +142,87 @@ const getAttendanceSummary = async (req, res) => {
   }
 };
 
+// GET /api/student/profile
+// Returns the logged-in student's personal info plus the headline stats
+// (attendance %, last exam %, current fee dues) shown on the profile page.
+const getMyProfile = async (req, res) => {
+  try {
+    const student = await Student.findOne({
+      where: { user_id: req.user.id },
+      include: [
+        { model: Class, as: 'class' },
+        { model: User, as: 'user', attributes: ['name', 'email', 'phone'] },
+      ],
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student profile not found' });
+    }
+
+    // ── Attendance % for the current year ──────────────────────────────
+    const currentYear = new Date().getFullYear();
+    const attendanceRecords = await Attendance.findAll({
+      where: {
+        student_id: student.id,
+        date: { [Op.between]: [`${currentYear}-01-01`, `${currentYear}-12-31`] },
+      },
+    });
+    const totalDays = attendanceRecords.length;
+    const presentDays = attendanceRecords.filter((r) => r.status === 'present').length;
+    const attendancePercentage =
+      totalDays > 0 ? parseFloat(((presentDays / totalDays) * 100).toFixed(1)) : null;
+
+    // ── Last exam % (most recently uploaded exam) ──────────────────────
+    const allMarks = await Mark.findAll({
+      where: { student_id: student.id },
+      order: [['created_at', 'DESC']],
+    });
+    let lastExamPercentage = null;
+    if (allMarks.length > 0) {
+      const lastExamType = allMarks[0].exam_type;
+      const examMarks = allMarks.filter(
+        (m) => m.exam_type === lastExamType && !m.is_absent && m.marks_obtained !== null
+      );
+      const obtained = examMarks.reduce((sum, m) => sum + parseFloat(m.marks_obtained), 0);
+      const max = examMarks.reduce((sum, m) => sum + m.max_marks, 0);
+      lastExamPercentage = max > 0 ? Math.round((obtained / max) * 10000) / 100 : null;
+    }
+
+    // ── Current fee dues (last pending balance + dynamic fine) ─────────
+    const lastFeeRow = await FeePayment.findOne({
+      where: { student_id: student.id },
+      order: [['billing_year', 'DESC'], ['billing_month', 'DESC'], ['id', 'DESC']],
+    });
+    const pending = lastFeeRow ? parseFloat(lastFeeRow.pending_after) : 0;
+    const fineData = await calculateFine(student.id);
+    const feeDues = pending + (fineData?.fine || 0);
+
+    res.json({
+      personal: {
+        name: student.user?.name || null,
+        roll_number: student.roll_number,
+        class: student.class
+          ? `${student.class.class_name}-${student.class.section}`
+          : null,
+        date_of_birth: student.date_of_birth,
+        guardian_name: student.father_name || student.mother_name || null,
+        contact: student.father_phone || student.mother_phone || student.user?.phone || null,
+        address: student.address,
+      },
+      stats: {
+        attendance_percentage: attendancePercentage,
+        last_exam_percentage: lastExamPercentage,
+        fee_dues: feeDues,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching student profile:', error);
+    res.status(500).json({ message: 'Server error fetching profile' });
+  }
+};
+
 module.exports = {
   getMyAttendance,
   getAttendanceSummary,
+  getMyProfile,
 };

@@ -13,22 +13,32 @@ const User = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
-    email: {
+    username: {
       type: DataTypes.STRING,
       unique: true,
       allowNull: false,
+    },
+    email: {
+      type: DataTypes.STRING,
+      unique: true,
+      allowNull: true,
     },
     password: {
       type: DataTypes.STRING,
       allowNull: false,
     },
     role: {
-      type: DataTypes.ENUM("admin", "teacher", "student"),
+      type: DataTypes.ENUM("admin", "teacher", "student", "superadmin"),
       allowNull: false,
     },
     phone: {
       type: DataTypes.STRING,
       allowNull: true,
+    },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
     },
   },
   {
