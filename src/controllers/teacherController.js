@@ -7,6 +7,22 @@ const { publicUrl } = require('../utils/s3');
 
 const LATE_THRESHOLD = { hour: 9, minute: 30 };
 
+// Student columns a class teacher may edit (mirrors the admin form, minus class_id —
+// a teacher cannot move a student out of her own class).
+const STUDENT_EDITABLE = [
+  'roll_number', 'date_of_birth', 'address', 'admission_date', 'status',
+  'aadhaar_number', 'blood_group', 'category', 'religion', 'nationality',
+  'city', 'state', 'pincode',
+  'father_name', 'father_phone', 'father_aadhaar',
+  'mother_name', 'mother_phone', 'mother_aadhaar',
+  'parents_pan', 'birth_certificate_number', 'ews_certificate_number',
+];
+
+const pick = (src, keys) => keys.reduce((o, k) => {
+  if (src[k] !== undefined) o[k] = src[k];
+  return o;
+}, {});
+
 // GET /api/teacher/classes
 // Returns classes assigned to the logged-in teacher (via class_teacher_id)
 const getMyClasses = async (req, res) => {
@@ -44,7 +60,7 @@ const getStudentsByClass = async (req, res) => {
         {
           model: User,
           as: 'user',
-          attributes: ['id', 'name', 'email'],
+          attributes: ['id', 'name', 'username', 'email', 'phone'],
         },
       ],
       order: [['roll_number', 'ASC']],
@@ -57,6 +73,59 @@ const getStudentsByClass = async (req, res) => {
   } catch (error) {
     console.error('Error fetching students:', error);
     res.status(500).json({ message: 'Server error fetching students' });
+  }
+};
+
+// PUT /api/teacher/students/:id
+// A class teacher edits a student's profile. Allowed only when the superadmin has
+// turned on this teacher's can_edit_students flag AND the student is in her own class.
+const updateClassStudent = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const teacher = await Teacher.findOne({ where: { user_id: req.user.id } });
+    if (!teacher) { await t.rollback(); return res.status(404).json({ message: 'Teacher profile not found' }); }
+
+    if (!teacher.can_edit_students) {
+      await t.rollback();
+      return res.status(403).json({ message: 'You do not have permission to edit students. Ask an administrator to enable it.' });
+    }
+
+    const student = await Student.findByPk(req.params.id, { include: [{ model: User, as: 'user' }] });
+    if (!student) { await t.rollback(); return res.status(404).json({ message: 'Student not found' }); }
+
+    // The student must belong to a class this teacher is the class teacher of.
+    const ownClass = await Class.findOne({ where: { id: student.class_id, class_teacher_id: teacher.id } });
+    if (!ownClass) {
+      await t.rollback();
+      return res.status(403).json({ message: 'You can only edit students in your own class' });
+    }
+
+    const userUpdates = pick(req.body, ['name', 'email', 'phone']);
+    const studentUpdates = pick(req.body, STUDENT_EDITABLE);
+
+    // Guard the per-class unique roll number if it is being changed.
+    if (studentUpdates.roll_number !== undefined && Number(studentUpdates.roll_number) !== student.roll_number) {
+      const clash = await Student.findOne({
+        where: { class_id: student.class_id, roll_number: studentUpdates.roll_number, id: { [Op.ne]: student.id } },
+      });
+      if (clash) { await t.rollback(); return res.status(409).json({ message: `Roll number ${studentUpdates.roll_number} already exists in this class` }); }
+    }
+
+    if (Object.keys(userUpdates).length) await student.user.update(userUpdates, { transaction: t });
+    if (Object.keys(studentUpdates).length) await student.update(studentUpdates, { transaction: t });
+    await t.commit();
+
+    const updated = await Student.findByPk(student.id, {
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'name', 'username', 'email', 'phone'] },
+        { model: Class, as: 'class', attributes: ['id', 'class_name', 'section'] },
+      ],
+    });
+    res.json({ message: 'Student updated', student: updated });
+  } catch (error) {
+    await t.rollback();
+    console.error('Update class student error:', error);
+    res.status(500).json({ message: 'Failed to update student' });
   }
 };
 
@@ -346,7 +415,7 @@ const getMyStudents = async (req, res) => {
       order: [['roll_number', 'ASC']],
     });
 
-    res.json({ success: true, students, classes: teacherClasses });
+    res.json({ success: true, students, classes: teacherClasses, canEditStudents: teacher.can_edit_students });
   } catch (error) {
     console.error('getMyStudents error:', error);
     res.status(500).json({ message: 'Failed to fetch students' });
@@ -356,6 +425,7 @@ const getMyStudents = async (req, res) => {
 module.exports = {
   getMyClasses,
   getStudentsByClass,
+  updateClassStudent,
   getMyStudents,
   submitAttendance,
   getAttendanceByDate,

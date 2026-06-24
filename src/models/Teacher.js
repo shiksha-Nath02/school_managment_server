@@ -59,6 +59,10 @@ const Teacher = sequelize.define(
     bank_account_number:     { type: DataTypes.STRING(30),                           allowNull: true },
     bank_ifsc:               { type: DataTypes.STRING(15),                           allowNull: true },
     bank_name:               { type: DataTypes.STRING(150),                          allowNull: true },
+
+    // ⑤ Permissions — superadmin-controlled. When true, this teacher may edit
+    // the profiles of students in her own class (see teacherController.updateClassStudent).
+    can_edit_students:       { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   },
   {
     tableName: "teachers",

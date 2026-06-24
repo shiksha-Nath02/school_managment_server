@@ -4,7 +4,7 @@ const {
   getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory,
   getTeacherAttendanceById, getTeacherClassesById,
   verifyTeacherAttendance,
-  getAllTeachers, addTeacher, updateTeacher, removeTeacher,
+  getAllTeachers, addTeacher, updateTeacher, removeTeacher, setTeacherPermissions,
   getTeacherAttendance, submitTeacherAttendance,
   checkInTeacher, checkOutTeacher, markTeacherStatus,
   updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary,
@@ -42,6 +42,9 @@ router.get('/teachers', getAllTeachers);
 router.post('/teachers', addTeacher);
 router.put('/teachers/:id', updateTeacher);
 router.delete('/teachers/:id', removeTeacher);
+
+// Superadmin-only: toggle whether a teacher can edit students in her own class.
+router.put('/teachers/:id/permissions', authorize('superadmin'), setTeacherPermissions);
 
 // Teacher profile sub-routes
 router.get('/teachers/:id/attendance', getTeacherAttendanceById);
