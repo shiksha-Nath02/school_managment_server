@@ -17,6 +17,12 @@ const Student = sequelize.define(
         key: "id",
       },
     },
+    // School admission number (explicit, correctable). Distinct from the PK `id`.
+    // Mirrors users.username, which is what students log in with.
+    admission_number: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
     class_id: {
       type: DataTypes.INTEGER,
       allowNull: false,

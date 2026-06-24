@@ -88,6 +88,7 @@ const addStudent = async (req, res) => {
     const user = await User.create({ name, username, email: email || null, password: hashedPassword, role: 'student', phone: phone || null }, { transaction: t });
     const student = await Student.create({
       user_id: user.id, class_id, roll_number,
+      admission_number: username,
       date_of_birth: date_of_birth || null,
       address: address || null,
       admission_date: admission_date || new Date(),
