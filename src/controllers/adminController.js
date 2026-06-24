@@ -11,6 +11,25 @@ const studentIncludes = [
   { model: Class, as: 'class', attributes: ['id', 'class_name', 'section'] },
 ];
 
+// All editable columns on the teachers table (everything except id/user_id/timestamps).
+// addTeacher/updateTeacher copy any of these present in the request body, so the admin
+// panel can save the full teacher profile, not just subject/salary/joining_date.
+const TEACHER_FIELDS = [
+  'subject', 'salary', 'joining_date',
+  'date_of_birth', 'gender', 'aadhaar_number', 'blood_group', 'marital_status',
+  'address', 'city', 'state', 'pincode', 'alternate_phone',
+  'emergency_contact_name', 'emergency_contact_phone',
+  'qualification', 'designation', 'department', 'experience_years',
+  'employment_type', 'date_of_leaving',
+  'pan_number', 'bank_account_number', 'bank_ifsc', 'bank_name',
+];
+
+// User columns the admin may edit on a teacher (login id = username = phone).
+const pick = (src, keys) => keys.reduce((o, k) => {
+  if (src[k] !== undefined) o[k] = src[k];
+  return o;
+}, {});
+
 const LATE_THRESHOLD = { hour: 9, minute: 30 }; // 9:30 AM
 
 // ─────────── HELPER ───────────
@@ -230,7 +249,7 @@ const getClasses = async (req, res) => {
 const getAllTeachers = async (req, res) => {
   try {
     const teachers = await Teacher.findAll({
-      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone', 'is_active'], where: { is_active: true } }],
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'username', 'email', 'phone', 'is_active'], where: { is_active: true } }],
       order: [['id', 'ASC']],
     });
     res.json({ teachers });
@@ -257,14 +276,12 @@ const addTeacher = async (req, res) => {
     const user = await User.create({ name, username, email: email || null, password: hashedPassword, role: 'teacher', phone: phone || null }, { transaction: t });
     const teacher = await Teacher.create({
       user_id: user.id,
-      subject: subject || null,
-      salary: salary || null,
-      joining_date: joining_date || null,
+      ...pick(req.body, TEACHER_FIELDS),
     }, { transaction: t });
     await t.commit();
 
     const full = await Teacher.findByPk(teacher.id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] }],
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'username', 'email', 'phone'] }],
     });
     res.status(201).json({ message: 'Teacher added successfully', teacher: full });
   } catch (error) {
@@ -280,30 +297,28 @@ const updateTeacher = async (req, res) => {
     const teacher = await Teacher.findByPk(req.params.id, { include: [{ model: User, as: 'user' }] });
     if (!teacher) { await t.rollback(); return res.status(404).json({ message: 'Teacher not found' }); }
 
-    const { name, email, phone, password, subject, salary, joining_date } = req.body;
+    const { email, username, password } = req.body;
 
     if (email && email !== teacher.user.email && await User.findOne({ where: { email, id: { [Op.ne]: teacher.user_id } } })) {
       await t.rollback();
       return res.status(409).json({ message: 'Email already in use' });
     }
+    if (username && username !== teacher.user.username && await User.findOne({ where: { username, id: { [Op.ne]: teacher.user_id } } })) {
+      await t.rollback();
+      return res.status(409).json({ message: 'Username (login ID) already in use' });
+    }
 
-    const userUpdates = {};
-    if (name !== undefined) userUpdates.name = name;
-    if (email !== undefined) userUpdates.email = email;
-    if (phone !== undefined) userUpdates.phone = phone;
+    const userUpdates = pick(req.body, ['name', 'email', 'phone', 'username']);
     if (password) userUpdates.password = await bcrypt.hash(password, 10);
 
-    const teacherUpdates = {};
-    if (subject !== undefined) teacherUpdates.subject = subject;
-    if (salary !== undefined) teacherUpdates.salary = salary;
-    if (joining_date !== undefined) teacherUpdates.joining_date = joining_date;
+    const teacherUpdates = pick(req.body, TEACHER_FIELDS);
 
     if (Object.keys(userUpdates).length) await teacher.user.update(userUpdates, { transaction: t });
     if (Object.keys(teacherUpdates).length) await teacher.update(teacherUpdates, { transaction: t });
     await t.commit();
 
     const updated = await Teacher.findByPk(teacher.id, {
-      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] }],
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'username', 'email', 'phone'] }],
     });
     res.json({ message: 'Teacher updated', teacher: updated });
   } catch (error) {
@@ -327,6 +342,25 @@ const removeTeacher = async (req, res) => {
     await t.rollback();
     console.error('Remove teacher error:', error);
     res.status(500).json({ message: 'Failed to remove teacher' });
+  }
+};
+
+// PUT /api/admin/teachers/:id/permissions  — SUPERADMIN ONLY (guarded in routes).
+// Toggles whether this teacher may edit students in her own class.
+const setTeacherPermissions = async (req, res) => {
+  try {
+    const teacher = await Teacher.findByPk(req.params.id);
+    if (!teacher) return res.status(404).json({ message: 'Teacher not found' });
+
+    const { can_edit_students } = req.body;
+    if (typeof can_edit_students !== 'boolean')
+      return res.status(400).json({ message: 'can_edit_students (true/false) is required' });
+
+    await teacher.update({ can_edit_students });
+    res.json({ message: 'Permissions updated', teacherId: teacher.id, can_edit_students: teacher.can_edit_students });
+  } catch (error) {
+    console.error('Set teacher permissions error:', error);
+    res.status(500).json({ message: 'Failed to update permissions' });
   }
 };
 
@@ -913,7 +947,7 @@ module.exports = {
   getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory,
   getTeacherAttendanceById, getTeacherClassesById,
   verifyTeacherAttendance,
-  getAllTeachers, addTeacher, updateTeacher, removeTeacher,
+  getAllTeachers, addTeacher, updateTeacher, removeTeacher, setTeacherPermissions,
   getTeacherAttendance, submitTeacherAttendance,
   checkInTeacher, checkOutTeacher, markTeacherStatus,
   updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary,

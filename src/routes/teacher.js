@@ -6,6 +6,7 @@ const { getTeacherStudentDocs, teacherUploadDocument, deleteDocument } = require
 const {
   getMyClasses,
   getStudentsByClass,
+  updateClassStudent,
   getMyStudents,
   submitAttendance,
   getAttendanceByDate,
@@ -30,6 +31,7 @@ const requireSelfAttendanceEnabled = (req, res, next) => {
 
 router.get('/classes', getMyClasses);
 router.get('/students/:classId', getStudentsByClass);
+router.put('/students/:id', updateClassStudent); // edit a student (gated by can_edit_students + own class)
 router.post('/attendance', submitAttendance);
 router.get('/attendance/:classId', getAttendanceByDate);
 router.get('/my-attendance', getMyAttendanceRecords);
