@@ -1,9 +1,11 @@
+const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const { User, Student, Teacher, Class, Attendance } = require('../models');
 const TeacherAttendance = require('../models/TeacherAttendance');
 const { saveBase64Image } = require('../utils/imageHelper');
 const { publicUrl } = require('../utils/s3');
+const { generateStudentPassword } = require('../utils/credentials');
 
 const LATE_THRESHOLD = { hour: 9, minute: 30 };
 
@@ -126,6 +128,126 @@ const updateClassStudent = async (req, res) => {
     await t.rollback();
     console.error('Update class student error:', error);
     res.status(500).json({ message: 'Failed to update student' });
+  }
+};
+
+// GET /api/teacher/profile
+// Real profile + summary stats for the logged-in teacher (replaces hardcoded UI).
+const getMyProfile = async (req, res) => {
+  try {
+    const teacher = await Teacher.findOne({
+      where: { user_id: req.user.id },
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'username', 'email', 'phone', 'is_active'] }],
+    });
+    if (!teacher) return res.status(404).json({ message: 'Teacher profile not found' });
+
+    const classes = await Class.findAll({
+      where: { class_teacher_id: teacher.id },
+      order: [['class_name', 'ASC'], ['section', 'ASC']],
+    });
+    const classIds = classes.map((c) => c.id);
+    const studentCount = classIds.length
+      ? await Student.count({ where: { class_id: { [Op.in]: classIds } } })
+      : 0;
+
+    // Effective attendance % for the current calendar year.
+    const year = new Date().getFullYear();
+    const records = await TeacherAttendance.findAll({
+      where: { teacher_id: teacher.id, date: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] } },
+      attributes: ['status'],
+    });
+    const effective = records.filter((r) => ['present', 'late', 'half_day', 'official_duty'].includes(r.status)).length;
+    const attendancePct = records.length ? Math.round((effective / records.length) * 100) : null;
+
+    res.json({
+      teacher,
+      classes: classes.map((c) => ({ id: c.id, className: c.class_name, section: c.section })),
+      stats: {
+        studentCount,
+        classCount: classes.length,
+        attendancePct,
+        canEditStudents: teacher.can_edit_students,
+      },
+    });
+  } catch (error) {
+    console.error('Get teacher profile error:', error);
+    res.status(500).json({ message: 'Failed to fetch profile' });
+  }
+};
+
+// POST /api/teacher/students
+// A class teacher adds a new student to her OWN class. Gated by can_edit_students
+// (the same superadmin toggle that enables editing). class_id must be a class this
+// teacher is the class teacher of.
+const addClassStudent = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const teacher = await Teacher.findOne({ where: { user_id: req.user.id } });
+    if (!teacher) { await t.rollback(); return res.status(404).json({ message: 'Teacher profile not found' }); }
+    if (!teacher.can_edit_students) {
+      await t.rollback();
+      return res.status(403).json({ message: 'You do not have permission to add students. Ask an administrator to enable it.' });
+    }
+
+    const { name, username, email, phone, password, class_id, roll_number, date_of_birth } = req.body;
+    if (!name || !username || !class_id || !roll_number) {
+      await t.rollback();
+      return res.status(400).json({ message: 'Name, admission number, class, and roll number are required' });
+    }
+
+    // The class must be one this teacher is the class teacher of.
+    const ownClass = await Class.findOne({ where: { id: class_id, class_teacher_id: teacher.id } });
+    if (!ownClass) { await t.rollback(); return res.status(403).json({ message: 'You can only add students to your own class' }); }
+
+    if (await User.findOne({ where: { username } })) {
+      await t.rollback();
+      return res.status(409).json({ message: `Admission number ${username} already exists` });
+    }
+    if (email && await User.findOne({ where: { email } })) {
+      await t.rollback();
+      return res.status(409).json({ message: 'Email already registered' });
+    }
+    if (await Student.findOne({ where: { class_id, roll_number } })) {
+      await t.rollback();
+      return res.status(409).json({ message: `Roll number ${roll_number} already exists in this class` });
+    }
+
+    // Default password = birth year + first 4 letters of name (needs a DOB).
+    let plainPassword = password;
+    if (!plainPassword) {
+      if (!date_of_birth) { await t.rollback(); return res.status(400).json({ message: 'date_of_birth is required to generate the default password' }); }
+      plainPassword = generateStudentPassword(name, date_of_birth);
+    }
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
+
+    const user = await User.create(
+      { name, username, email: email || null, password: hashedPassword, role: 'student', phone: phone || null },
+      { transaction: t }
+    );
+    const student = await Student.create({
+      user_id: user.id,
+      class_id,
+      admission_number: username,
+      ...pick(req.body, STUDENT_EDITABLE),
+      roll_number,
+      date_of_birth: date_of_birth || null,
+      status: 'active',
+      nationality: req.body.nationality || 'Indian',
+      admission_date: req.body.admission_date || new Date(),
+    }, { transaction: t });
+    await t.commit();
+
+    const full = await Student.findByPk(student.id, {
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'name', 'username', 'email', 'phone'] },
+        { model: Class, as: 'class', attributes: ['id', 'class_name', 'section'] },
+      ],
+    });
+    res.status(201).json({ message: 'Student added', student: full });
+  } catch (error) {
+    await t.rollback();
+    console.error('Add class student error:', error);
+    res.status(500).json({ message: 'Failed to add student' });
   }
 };
 
@@ -426,6 +548,8 @@ module.exports = {
   getMyClasses,
   getStudentsByClass,
   updateClassStudent,
+  addClassStudent,
+  getMyProfile,
   getMyStudents,
   submitAttendance,
   getAttendanceByDate,

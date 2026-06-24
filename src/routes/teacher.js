@@ -7,6 +7,8 @@ const {
   getMyClasses,
   getStudentsByClass,
   updateClassStudent,
+  addClassStudent,
+  getMyProfile,
   getMyStudents,
   submitAttendance,
   getAttendanceByDate,
@@ -29,8 +31,10 @@ const requireSelfAttendanceEnabled = (req, res, next) => {
 
 // req.user is set by the authenticate middleware mounted in app.js.
 
+router.get('/profile', getMyProfile);
 router.get('/classes', getMyClasses);
 router.get('/students/:classId', getStudentsByClass);
+router.post('/students', addClassStudent); // add a student to own class (gated by can_edit_students)
 router.put('/students/:id', updateClassStudent); // edit a student (gated by can_edit_students + own class)
 router.post('/attendance', submitAttendance);
 router.get('/attendance/:classId', getAttendanceByDate);
