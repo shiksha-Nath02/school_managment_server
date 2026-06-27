@@ -55,7 +55,8 @@ const getDashboard = async (req, res) => {
       PaymentLog.sum('amount', { where: { direction: 'expenditure', date: monthRange } }),
       UniformPayment.sum('amount_paid', { where: { payment_date: monthRange } }),
       BookPayment.sum('amount_paid', { where: { payment_date: monthRange } }),
-      Expense.sum('amount', { where: { category: { [Op.in]: ['stationary', 'pantry'] }, date: monthRange } }),
+      // All expenditure reasons (stationary, pantry, inventory, salary, …).
+      Expense.sum('amount', { where: { date: monthRange } }),
       FeePayment.findAll({
         where: { is_system_generated: false, amount_paid: { [Op.gt]: 0 } },
         order: [['payment_date', 'DESC'], ['id', 'DESC']],

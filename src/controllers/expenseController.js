@@ -1,11 +1,21 @@
+const { Op } = require('sequelize');
 const Expense = require('../models/Expense');
+
+// Allowed expenditure reasons (category is the stored key).
+const REASONS = ['stationary', 'pantry', 'inventory', 'salary'];
 
 const getExpenses = async (req, res) => {
   try {
-    const { category } = req.query;
-    if (!category) return res.status(400).json({ message: 'category is required' });
+    const { category, from, to } = req.query;
+    const where = {};
+    if (category) where.category = category;
+    if (from || to) {
+      where.date = {};
+      if (from) where.date[Op.gte] = from;
+      if (to) where.date[Op.lte] = to;
+    }
     const expenses = await Expense.findAll({
-      where: { category },
+      where,
       order: [['date', 'DESC'], ['id', 'DESC']],
     });
     const total = expenses.reduce((s, e) => s + parseFloat(e.amount), 0);
@@ -19,7 +29,8 @@ const getExpenses = async (req, res) => {
 const addExpense = async (req, res) => {
   try {
     const { category, description, amount, date } = req.body;
-    if (!category || !amount || !date) return res.status(400).json({ message: 'category, amount, and date are required' });
+    if (!category || !amount || !date) return res.status(400).json({ message: 'category (reason), amount, and date are required' });
+    if (!REASONS.includes(category)) return res.status(400).json({ message: `Invalid reason. Allowed: ${REASONS.join(', ')}` });
     const expense = await Expense.create({
       category,
       description: description || null,

@@ -18,6 +18,7 @@ const STUDENT_EDITABLE = [
   'father_name', 'father_phone', 'father_aadhaar',
   'mother_name', 'mother_phone', 'mother_aadhaar',
   'parents_pan', 'birth_certificate_number', 'ews_certificate_number',
+  'pen_number', 'apaar_id',
 ];
 
 const pick = (src, keys) => keys.reduce((o, k) => {
@@ -104,6 +105,17 @@ const updateClassStudent = async (req, res) => {
 
     const userUpdates = pick(req.body, ['name', 'email', 'phone']);
     const studentUpdates = pick(req.body, STUDENT_EDITABLE);
+
+    // Admission number is the login username — keep both in sync when it changes,
+    // checking the new value isn't already taken by another user.
+    const { admission_number } = req.body;
+    if (admission_number !== undefined && String(admission_number) !== String(student.admission_number || '')) {
+      if (!String(admission_number).trim()) { await t.rollback(); return res.status(400).json({ message: 'Admission number cannot be empty' }); }
+      const clash = await User.findOne({ where: { username: admission_number, id: { [Op.ne]: student.user_id } } });
+      if (clash) { await t.rollback(); return res.status(409).json({ message: `Admission number ${admission_number} is already in use` }); }
+      userUpdates.username = admission_number;
+      studentUpdates.admission_number = admission_number;
+    }
 
     // Guard the per-class unique roll number if it is being changed.
     if (studentUpdates.roll_number !== undefined && Number(studentUpdates.roll_number) !== student.roll_number) {

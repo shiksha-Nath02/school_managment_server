@@ -1,9 +1,8 @@
 const express = require('express');
-const { authenticate, authorize } = require('../middlewares/auth');
 const { getExpenses, addExpense, deleteExpense } = require('../controllers/expenseController');
 
+// Auth/role is applied at the mount point in app.js (adminOnly = admin + superadmin).
 const router = express.Router();
-router.use(authenticate, authorize('admin'));
 
 router.get('/expenses',     getExpenses);
 router.post('/expenses',    addExpense);
