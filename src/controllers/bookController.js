@@ -137,8 +137,16 @@ const sellItem = async (req, res) => {
     const toBePaid = parseFloat(item.price) * qty;
     const paying  = Math.min(parseFloat(amount_paying) || 0, toBePaid);
 
+    // Link to a student by admission number (FK survives later edits;
+    // unmatched/walk-in sales just stay unlinked).
+    let student_id = null;
+    if (admission_number) {
+      const s = await Student.findOne({ where: { admission_number }, attributes: ['id'] });
+      if (s) student_id = s.id;
+    }
+
     const txn = await BookTransaction.create({
-      student_name, father_phone, admission_number, item_id, quantity: qty,
+      student_name, father_phone, admission_number, student_id, item_id, quantity: qty,
       to_be_paid: toBePaid, paid: paying,
     }, { transaction: t });
 

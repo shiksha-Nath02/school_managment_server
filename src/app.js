@@ -14,6 +14,8 @@ const documentRoutes = require('./routes/documents');
 const publicRoutes = require('./routes/public');
 const galleryRoutes = require('./routes/gallery');
 const circularRoutes = require('./routes/circulars');
+const staffRoutes = require('./routes/staff');
+const enquiryRoutes = require('./routes/enquiries');
 const { authenticate, authorize } = require('./middlewares/auth');
 
 const app = express();
@@ -44,6 +46,8 @@ app.use("/api/admin", adminOnly, expenseRoutes);
 app.use("/api/admin", adminOnly, documentRoutes);
 app.use("/api/admin", adminOnly, galleryRoutes);
 app.use("/api/admin", adminOnly, circularRoutes);
+app.use("/api/admin", adminOnly, staffRoutes);
+app.use("/api/admin", adminOnly, enquiryRoutes);
 app.use('/api/teacher', authenticate, authorize("teacher"), teacherRoutes);
 app.use('/api/student', authenticate, authorize("student"), studentRoutes);
 

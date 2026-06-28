@@ -726,16 +726,44 @@ const getStudentFees = async (req, res) => {
   }
 };
 
+// GET /api/admin/student-lookup?admission_number=1151
+// Used by the uniform/book sell forms to auto-fill student details.
+const lookupStudent = async (req, res) => {
+  try {
+    const { admission_number } = req.query;
+    if (!admission_number) return res.status(400).json({ message: 'admission_number is required' });
+    const student = await Student.findOne({
+      where: { admission_number },
+      include: [
+        { model: User, as: 'user', attributes: ['name', 'phone'] },
+        { model: Class, as: 'class', attributes: ['class_name', 'section'] },
+      ],
+    });
+    if (!student) return res.json({ student: null });
+    res.json({
+      student: {
+        id:              student.id,
+        admissionNumber: student.admission_number,
+        name:            student.user?.name || null,
+        fatherName:      student.father_name || null,
+        fatherPhone:     student.father_phone || null,
+        className:       student.class ? `${student.class.class_name} ${student.class.section}` : null,
+      },
+    });
+  } catch (e) {
+    console.error('Student lookup error:', e);
+    res.status(500).json({ message: 'Lookup failed' });
+  }
+};
+
 const getStudentInventory = async (req, res) => {
   try {
     const student = await Student.findByPk(req.params.id);
     if (!student) return res.status(404).json({ message: 'Student not found' });
 
-    const admNo = String(student.id);
-
     const [uniformTxns, bookTxns] = await Promise.all([
       UniformTransaction.findAll({
-        where: { admission_number: admNo },
+        where: { student_id: student.id },
         include: [
           { model: UniformItem, as: 'item' },
           { model: UniformPayment, as: 'payments', order: [['payment_date', 'ASC']] },
@@ -743,7 +771,7 @@ const getStudentInventory = async (req, res) => {
         order: [['created_at', 'DESC']],
       }),
       BookTransaction.findAll({
-        where: { admission_number: admNo },
+        where: { student_id: student.id },
         include: [
           { model: BookItem, as: 'item' },
           { model: BookPayment, as: 'payments', order: [['payment_date', 'ASC']] },
@@ -781,7 +809,7 @@ const getStudentInventory = async (req, res) => {
 
     res.json({
       studentId:       student.id,
-      admissionNumber: admNo,
+      admissionNumber: student.admission_number,
       transactions,
       summary: { totalTransactions: transactions.length, totalSpent, totalPending },
     });
@@ -959,7 +987,7 @@ const resetUserPassword = async (req, res) => {
 module.exports = {
   resetUserPassword,
   addStudent, getStudents, getStudentById, updateStudent, removeStudent, getClasses,
-  getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory,
+  getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory, lookupStudent,
   getTeacherAttendanceById, getTeacherClassesById,
   verifyTeacherAttendance,
   getAllTeachers, addTeacher, updateTeacher, removeTeacher, setTeacherPermissions,

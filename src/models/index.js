@@ -24,6 +24,9 @@ const Expense = require('./Expense');
 const StudentDocument = require('./StudentDocument');
 const GalleryImage = require('./GalleryImage');
 const Circular = require('./Circular');
+const AppSetting = require('./AppSetting');
+const Staff = require('./Staff');
+const Enquiry = require('./Enquiry');
 
 // ===== ASSOCIATIONS =====
 
@@ -137,4 +140,7 @@ module.exports = {
   StudentDocument,
   GalleryImage,
   Circular,
+  AppSetting,
+  Staff,
+  Enquiry,
 };
