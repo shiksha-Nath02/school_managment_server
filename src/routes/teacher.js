@@ -39,6 +39,12 @@ router.put('/students/:id', updateClassStudent); // edit a student (gated by can
 router.post('/attendance', submitAttendance);
 router.get('/attendance/:classId', getAttendanceByDate);
 router.get('/my-attendance', getMyAttendanceRecords);
+// Read-only: lets a teacher know if self check-in is enabled today (the admin
+// toggle lives under /admin, which teachers can't read).
+router.get('/self-attendance-setting', (req, res) => {
+  const today = new Date().toISOString().split('T')[0];
+  res.json({ date: today, enabled: selfAttendanceSettings.isEnabled(today) });
+});
 router.post('/self-checkin', requireSelfAttendanceEnabled, selfCheckIn);
 router.post('/self-checkout', requireSelfAttendanceEnabled, selfCheckOut);
 

@@ -5,6 +5,7 @@ const {
   getMyAttendance,
   getAttendanceSummary,
   getMyProfile,
+  getMyPurchases,
 } = require('../controllers/studentController');
 const timetableController = require('../controllers/timetableController');
 const classTaskController = require('../controllers/classTaskController');
@@ -28,6 +29,9 @@ router.get('/class-tasks', classTaskController.getStudentClassTasks);
 
 // Fee history
 router.get('/fee-history', feeController.getMyFeeHistory);
+
+// Uniform + book purchases (dues / payment history)
+router.get('/purchases', getMyPurchases);
 
 // Results
 router.get('/results', marksController.getOwnResults);
