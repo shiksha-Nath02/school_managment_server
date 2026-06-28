@@ -23,22 +23,27 @@ const listGallery = async (req, res) => {
   }
 };
 
-// ── Admin: upload a gallery image ─────────────────────────────────────────────
+// ── Admin: upload one or many images into a folder (category) ─────────────────
 const uploadGallery = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    const files = req.files && req.files.length ? req.files : (req.file ? [req.file] : []);
+    if (!files.length) return res.status(400).json({ success: false, message: 'No file uploaded' });
     const { category, caption } = req.body;
-    if (!category) return res.status(400).json({ success: false, message: 'Category is required' });
+    if (!category || !category.trim()) return res.status(400).json({ success: false, message: 'Folder name is required' });
+    const folder = category.trim();
 
-    const { buffer, contentType } = await compressImage(req.file.buffer);
-    const objectKey = key('gallery', `${category}_${Date.now()}.jpg`);
-    await uploadBuffer({ bucket: PUBLIC_BUCKET, key: objectKey, body: buffer, contentType });
-
-    const image = await GalleryImage.create({ category, image_key: objectKey, caption: caption || null });
-    res.json({ success: true, image: fmt(image) });
+    const created = [];
+    for (let i = 0; i < files.length; i++) {
+      const { buffer, contentType } = await compressImage(files[i].buffer);
+      const objectKey = key('gallery', `${folder}_${Date.now()}_${i}.jpg`);
+      await uploadBuffer({ bucket: PUBLIC_BUCKET, key: objectKey, body: buffer, contentType });
+      const image = await GalleryImage.create({ category: folder, image_key: objectKey, caption: caption || null });
+      created.push(fmt(image));
+    }
+    res.json({ success: true, images: created });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success: false, message: 'Failed to upload image' });
+    res.status(500).json({ success: false, message: 'Failed to upload image(s)' });
   }
 };
 
