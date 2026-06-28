@@ -59,6 +59,7 @@ const addStudent = async (req, res) => {
       father_name, father_phone, father_aadhaar,
       mother_name, mother_phone, mother_aadhaar,
       parents_pan, birth_certificate_number, ews_certificate_number,
+      pen_number, apaar_id,
     } = req.body;
     if (!name || !username || !class_id || !roll_number)
       return res.status(400).json({ message: 'Name, username (admission number), class, and roll number are required' });
@@ -109,6 +110,8 @@ const addStudent = async (req, res) => {
       parents_pan: parents_pan || null,
       birth_certificate_number: birth_certificate_number || null,
       ews_certificate_number: ews_certificate_number || null,
+      pen_number: pen_number || null,
+      apaar_id: apaar_id || null,
     }, { transaction: t });
     await t.commit();
 
@@ -167,11 +170,19 @@ const updateStudent = async (req, res) => {
     const student = await Student.findByPk(req.params.id, { include: [{ model: User, as: 'user' }] });
     if (!student) { await t.rollback(); return res.status(404).json({ message: 'Student not found' }); }
 
-    const { name, email, phone, password, class_id, roll_number, date_of_birth, address, admission_date } = req.body;
+    const { name, email, phone, password, class_id, roll_number, date_of_birth, address, admission_date, admission_number } = req.body;
 
     if (email && email !== student.user.email && await User.findOne({ where: { email, id: { [Op.ne]: student.user_id } } })) {
       await t.rollback();
       return res.status(409).json({ message: 'Email already in use' });
+    }
+
+    // Admission number is the student's login username. Editing it keeps the two in
+    // sync, so check the new value isn't already taken by another user.
+    if (admission_number !== undefined && String(admission_number) !== String(student.admission_number || '')) {
+      if (!String(admission_number).trim()) { await t.rollback(); return res.status(400).json({ message: 'Admission number cannot be empty' }); }
+      const clash = await User.findOne({ where: { username: admission_number, id: { [Op.ne]: student.user_id } } });
+      if (clash) { await t.rollback(); return res.status(409).json({ message: `Admission number ${admission_number} is already in use` }); }
     }
     if (class_id && roll_number) {
       const conflict = await Student.findOne({ where: { class_id, roll_number, id: { [Op.ne]: student.id } } });
@@ -187,6 +198,8 @@ const updateStudent = async (req, res) => {
     if (email !== undefined) userUpdates.email = email;
     if (phone !== undefined) userUpdates.phone = phone;
     if (password) userUpdates.password = await bcrypt.hash(password, 10);
+    const admissionChanged = admission_number !== undefined && String(admission_number) !== String(student.admission_number || '');
+    if (admissionChanged) userUpdates.username = admission_number;
 
     const studentUpdates = {};
     if (class_id !== undefined) studentUpdates.class_id = class_id;
@@ -194,13 +207,14 @@ const updateStudent = async (req, res) => {
     if (date_of_birth !== undefined) studentUpdates.date_of_birth = date_of_birth;
     if (address !== undefined) studentUpdates.address = address;
     if (admission_date !== undefined) studentUpdates.admission_date = admission_date;
+    if (admissionChanged) studentUpdates.admission_number = admission_number;
 
     const extendedFields = [
       'aadhaar_number', 'father_name', 'father_phone', 'father_aadhaar',
       'mother_name', 'mother_phone', 'mother_aadhaar', 'parents_pan',
       'category', 'religion', 'nationality', 'blood_group',
       'birth_certificate_number', 'ews_certificate_number',
-      'pincode', 'city', 'state',
+      'pincode', 'city', 'state', 'status', 'pen_number', 'apaar_id',
     ];
     for (const field of extendedFields) {
       if (req.body[field] !== undefined) studentUpdates[field] = req.body[field] || null;
@@ -712,16 +726,44 @@ const getStudentFees = async (req, res) => {
   }
 };
 
+// GET /api/admin/student-lookup?admission_number=1151
+// Used by the uniform/book sell forms to auto-fill student details.
+const lookupStudent = async (req, res) => {
+  try {
+    const { admission_number } = req.query;
+    if (!admission_number) return res.status(400).json({ message: 'admission_number is required' });
+    const student = await Student.findOne({
+      where: { admission_number },
+      include: [
+        { model: User, as: 'user', attributes: ['name', 'phone'] },
+        { model: Class, as: 'class', attributes: ['class_name', 'section'] },
+      ],
+    });
+    if (!student) return res.json({ student: null });
+    res.json({
+      student: {
+        id:              student.id,
+        admissionNumber: student.admission_number,
+        name:            student.user?.name || null,
+        fatherName:      student.father_name || null,
+        fatherPhone:     student.father_phone || null,
+        className:       student.class ? `${student.class.class_name} ${student.class.section}` : null,
+      },
+    });
+  } catch (e) {
+    console.error('Student lookup error:', e);
+    res.status(500).json({ message: 'Lookup failed' });
+  }
+};
+
 const getStudentInventory = async (req, res) => {
   try {
     const student = await Student.findByPk(req.params.id);
     if (!student) return res.status(404).json({ message: 'Student not found' });
 
-    const admNo = String(student.id);
-
     const [uniformTxns, bookTxns] = await Promise.all([
       UniformTransaction.findAll({
-        where: { admission_number: admNo },
+        where: { student_id: student.id },
         include: [
           { model: UniformItem, as: 'item' },
           { model: UniformPayment, as: 'payments', order: [['payment_date', 'ASC']] },
@@ -729,7 +771,7 @@ const getStudentInventory = async (req, res) => {
         order: [['created_at', 'DESC']],
       }),
       BookTransaction.findAll({
-        where: { admission_number: admNo },
+        where: { student_id: student.id },
         include: [
           { model: BookItem, as: 'item' },
           { model: BookPayment, as: 'payments', order: [['payment_date', 'ASC']] },
@@ -767,7 +809,7 @@ const getStudentInventory = async (req, res) => {
 
     res.json({
       studentId:       student.id,
-      admissionNumber: admNo,
+      admissionNumber: student.admission_number,
       transactions,
       summary: { totalTransactions: transactions.length, totalSpent, totalPending },
     });
@@ -945,7 +987,7 @@ const resetUserPassword = async (req, res) => {
 module.exports = {
   resetUserPassword,
   addStudent, getStudents, getStudentById, updateStudent, removeStudent, getClasses,
-  getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory,
+  getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory, lookupStudent,
   getTeacherAttendanceById, getTeacherClassesById,
   verifyTeacherAttendance,
   getAllTeachers, addTeacher, updateTeacher, removeTeacher, setTeacherPermissions,

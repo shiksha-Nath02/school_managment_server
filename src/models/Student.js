@@ -23,6 +23,9 @@ const Student = sequelize.define(
       type: DataTypes.STRING(50),
       allowNull: true,
     },
+    // Permanent Education Number (PEN) and APAAR ID — optional govt identifiers.
+    pen_number:               { type: DataTypes.STRING(20),  allowNull: true },
+    apaar_id:                 { type: DataTypes.STRING(20),  allowNull: true },
     class_id: {
       type: DataTypes.INTEGER,
       allowNull: false,

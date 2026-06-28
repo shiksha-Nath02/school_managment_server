@@ -1,5 +1,9 @@
 const { Op } = require('sequelize');
-const { User, Student, Class, Attendance, Mark, FeePayment } = require('../models');
+const {
+  User, Student, Class, Attendance, Mark, FeePayment,
+  UniformTransaction, UniformItem, UniformPayment,
+  BookTransaction, BookItem, BookPayment,
+} = require('../models');
 const { calculateFine } = require('../utils/feeEngine');
 
 // GET /api/student/attendance?month=3&year=2026
@@ -221,8 +225,68 @@ const getMyProfile = async (req, res) => {
   }
 };
 
+// GET /api/student/purchases
+// The logged-in student's own uniform + book purchases with dues/payment history.
+const getMyPurchases = async (req, res) => {
+  try {
+    const student = await Student.findOne({ where: { user_id: req.user.id }, attributes: ['id', 'admission_number'] });
+    if (!student) return res.status(404).json({ message: 'Student profile not found' });
+
+    const [uniformTxns, bookTxns] = await Promise.all([
+      UniformTransaction.findAll({
+        where: { student_id: student.id },
+        include: [
+          { model: UniformItem, as: 'item' },
+          { model: UniformPayment, as: 'payments', order: [['payment_date', 'ASC']] },
+        ],
+        order: [['created_at', 'DESC']],
+      }),
+      BookTransaction.findAll({
+        where: { student_id: student.id },
+        include: [
+          { model: BookItem, as: 'item' },
+          { model: BookPayment, as: 'payments', order: [['payment_date', 'ASC']] },
+        ],
+        order: [['created_at', 'DESC']],
+      }),
+    ]);
+
+    const mapTxn = (t, type) => ({
+      id:        t.id,
+      type,
+      date:      t.created_at,
+      itemName:  type === 'uniform'
+        ? `${t.item?.item_name || '—'}${t.item?.size ? ` (${t.item.size})` : ''}`
+        : (t.item?.book_name || '—'),
+      className: type === 'book' ? (t.item?.class_name || null) : null,
+      subject:   type === 'book' ? (t.item?.subject || null) : null,
+      quantity:  t.quantity,
+      toBePaid:  parseFloat(t.to_be_paid),
+      paid:      parseFloat(t.paid),
+      left:      parseFloat(t.to_be_paid) - parseFloat(t.paid),
+      payments:  (t.payments || []).map((p) => ({
+        id: p.id, amountPaid: parseFloat(p.amount_paid), paymentDate: p.payment_date, remarks: p.remarks,
+      })),
+    });
+
+    const transactions = [
+      ...uniformTxns.map((t) => mapTxn(t, 'uniform')),
+      ...bookTxns.map((t) => mapTxn(t, 'book')),
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    const totalSpent   = transactions.reduce((s, t) => s + t.paid, 0);
+    const totalPending = transactions.reduce((s, t) => s + t.left, 0);
+
+    res.json({ transactions, summary: { totalTransactions: transactions.length, totalSpent, totalPending } });
+  } catch (e) {
+    console.error('Get my purchases error:', e);
+    res.status(500).json({ message: 'Failed to fetch purchases' });
+  }
+};
+
 module.exports = {
   getMyAttendance,
   getAttendanceSummary,
   getMyProfile,
+  getMyPurchases,
 };

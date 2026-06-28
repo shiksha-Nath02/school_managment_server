@@ -681,7 +681,7 @@ const getProfitReport = async (req, res) => {
       return {};
     };
 
-    const [paymentLogs, uniformPayments, bookPayments, stationaryExpenses, pantryExpenses] = await Promise.all([
+    const [paymentLogs, uniformPayments, bookPayments, expenses] = await Promise.all([
       PaymentLog.findAll({ where: dateCond('date'), order: [['date', 'DESC']] }),
       UniformPayment.findAll({
         where: dateCond('payment_date'),
@@ -691,8 +691,8 @@ const getProfitReport = async (req, res) => {
         where: dateCond('payment_date'),
         include: [{ model: BookTransaction, as: 'transaction', attributes: ['admission_number', 'student_name'] }],
       }),
-      Expense.findAll({ where: { category: 'stationary', ...dateCond('date') } }),
-      Expense.findAll({ where: { category: 'pantry',    ...dateCond('date') } }),
+      // All expenditure reasons (stationary, pantry, inventory, salary, …).
+      Expense.findAll({ where: dateCond('date') }),
     ]);
 
     const transactions = [];
@@ -732,25 +732,16 @@ const getProfitReport = async (req, res) => {
       });
     }
 
-    for (const exp of stationaryExpenses) {
+    // "stationary" is the stored key but displays as "stationery"; others use their own key.
+    const expTypeLabel = (c) => (c === 'stationary' ? 'stationery' : c || 'other');
+    for (const exp of expenses) {
       transactions.push({
-        id: `stat_${exp.id}`,
-        type: 'stationery',
+        id: `exp_${exp.id}`,
+        type: expTypeLabel(exp.category),
         direction: 'expenditure',
         amount: parseFloat(exp.amount),
         date: exp.date,
-        description: exp.description || 'Stationery expense',
-      });
-    }
-
-    for (const exp of pantryExpenses) {
-      transactions.push({
-        id: `pantry_${exp.id}`,
-        type: 'pantry',
-        direction: 'expenditure',
-        amount: parseFloat(exp.amount),
-        date: exp.date,
-        description: exp.description || 'Pantry expense',
+        description: exp.description || `${expTypeLabel(exp.category)} expense`,
       });
     }
 

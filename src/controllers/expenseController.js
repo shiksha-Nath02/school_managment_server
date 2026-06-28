@@ -1,11 +1,21 @@
+const { Op } = require('sequelize');
 const Expense = require('../models/Expense');
+
+// Allowed expenditure reasons (category is the stored key).
+const REASONS = ['stationary', 'pantry', 'inventory', 'salary', 'other'];
 
 const getExpenses = async (req, res) => {
   try {
-    const { category } = req.query;
-    if (!category) return res.status(400).json({ message: 'category is required' });
+    const { category, from, to } = req.query;
+    const where = {};
+    if (category) where.category = category;
+    if (from || to) {
+      where.date = {};
+      if (from) where.date[Op.gte] = from;
+      if (to) where.date[Op.lte] = to;
+    }
     const expenses = await Expense.findAll({
-      where: { category },
+      where,
       order: [['date', 'DESC'], ['id', 'DESC']],
     });
     const total = expenses.reduce((s, e) => s + parseFloat(e.amount), 0);
@@ -18,13 +28,25 @@ const getExpenses = async (req, res) => {
 
 const addExpense = async (req, res) => {
   try {
-    const { category, description, amount, date } = req.body;
-    if (!category || !amount || !date) return res.status(400).json({ message: 'category, amount, and date are required' });
+    const { category, description, amount, date, teacher_id, staff_id, gross_amount, deduction } = req.body;
+    if (!category || !amount || !date) return res.status(400).json({ message: 'category (reason), amount, and date are required' });
+    if (!REASONS.includes(category)) return res.status(400).json({ message: `Invalid reason. Allowed: ${REASONS.join(', ')}` });
+
+    const isSalary = category === 'salary';
+    if (isSalary && !teacher_id && !staff_id) {
+      return res.status(400).json({ message: 'Select a teacher or staff member for a salary payment' });
+    }
+
     const expense = await Expense.create({
       category,
       description: description || null,
-      amount:      parseFloat(amount),
+      amount:      parseFloat(amount), // final/net amount paid
       date,
+      // Salary-only fields; null for every other reason.
+      teacher_id:   isSalary ? (teacher_id || null) : null,
+      staff_id:     isSalary ? (staff_id || null) : null,
+      gross_amount: isSalary && gross_amount != null && gross_amount !== '' ? parseFloat(gross_amount) : null,
+      deduction:    isSalary && deduction    != null && deduction    !== '' ? parseFloat(deduction)    : null,
     });
     res.status(201).json({ message: 'Expense added', expense: fmt(expense) });
   } catch (e) {
@@ -51,6 +73,10 @@ function fmt(e) {
     description: e.description,
     amount:      parseFloat(e.amount),
     date:        e.date,
+    teacherId:   e.teacher_id || null,
+    staffId:     e.staff_id || null,
+    gross:       e.gross_amount != null ? parseFloat(e.gross_amount) : null,
+    deduction:   e.deduction != null ? parseFloat(e.deduction) : null,
   };
 }
 

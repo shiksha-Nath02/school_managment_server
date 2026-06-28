@@ -51,8 +51,10 @@ Required in `.env` at project root:
 - `src/controllers/` — business logic (authController, adminController)
 - `src/routes/` — Express routers
 - `src/middlewares/auth.js` — `authenticate` (JWT verification) and `authorize(...roles)` (role guard)
-- `src/migrations/` — 14 numbered Sequelize migrations (users, classes, teachers, students, timetable, attendance, marks, fees, inventory, expenses, etc.)
+- `src/migrations/` — numbered Sequelize migrations through **049** (users, classes, teachers, students, timetable, attendance, marks, fees, inventory, uniform, books, expenses, app_settings, staff, enquiries, etc.). Always add the next number; never edit an applied migration.
 - `src/config/` — `config.js` (Sequelize CLI config), `database.js` (Sequelize instance)
+
+**Route mounting (`app.js`):** `/api/auth` and `/api/public` are unauthenticated; everything under `/api/admin` is wrapped by `adminOnly = [authenticate, authorize("admin","superadmin")]`; `/api/teacher` and `/api/student` are guarded by their role. Do NOT add a second `authorize(...)` inside a route file mounted under `adminOnly` — it silently re-narrows the role (this caused a superadmin 403 on expenses). Role is applied once at the mount.
 
 **Database conventions:**
 - Underscored column names (`created_at`, `updated_at`)
@@ -60,15 +62,32 @@ Required in `.env` at project root:
 - Logging disabled by default
 
 **Model relationships:**
-- User 1:1 Student, User 1:1 Teacher
-- Class 1:Many Students
-- Teacher 1:Many Classes (as class_teacher)
+- User 1:1 Student, User 1:1 Teacher (students & teachers always get a `users` row for login)
+- Class 1:Many Students; Teacher 1:Many Classes (as class_teacher)
+- `Staff` (non-teaching staff) has **no** user/login — payroll only
+- Uniform/Book transactions carry a nullable `student_id` FK (the sale links to a student)
+- Salary payments are rows in `expenses` with a `teacher_id` OR `staff_id` payee + `gross_amount`/`deduction`
 
-**Auth flow:** Login returns a JWT (7-day expiry). Token sent as `Bearer <token>` in Authorization header. Passwords hashed with bcryptjs (10 rounds).
+**Identity keys:** a student logs in with `users.username`, which mirrors `students.admission_number`. Editing the admission number syncs `users.username` (uniqueness-checked). The auto-increment `students.id` is an internal PK, NOT the admission number — never match one against the other.
 
-## Known Issues
+**Auth flow:** Login returns a JWT (7-day expiry). Token sent as `Bearer <token>` in Authorization header. Passwords hashed with bcryptjs (10 rounds). Student default password = birth-year + first 4 letters of name (e.g. `2018arya`).
 
-- `bcryptjs`, `jsonwebtoken`, and `cors` are imported in code but **not listed in package.json** — they must be installed manually
-- `package.json` main field points to `index.js` which doesn't exist
-- No npm start/dev scripts defined
-- Only admin routes are implemented; teacher and student role routes are not yet built
+## Feature areas
+
+- **Students / Teachers** — CRUD with full profiles; PEN number + APAAR ID on students; editable admission number (username sync); per-teacher `can_edit_students` flag lets a class teacher edit her own students.
+- **Attendance** — student attendance (teacher-marked) + teacher self check-in with photo, gated by a per-day toggle persisted in `app_settings` (survives restarts; cache hydrated on boot via `selfAttendanceSettings.load()` in `server.js`).
+- **Inventory / Uniform / Books** — items with stock + sales (transactions) with partial-payment dues; sales link to a student (`student_id`); students see them via `GET /api/student/purchases`.
+- **Expenditure** — single `expenses` ledger; reasons: `stationary`, `pantry`, `inventory`, `salary`, `other`. **Salary** payments select a teacher/staff payee, prefill the configured salary, and store gross + deduction. Profit & Dashboard total ALL expense reasons (so salary/inventory count once — never double-enter salary elsewhere).
+- **Fees** — sessions, monthly fees, payments, dues, profit report.
+- **Public website APIs** (`/api/public`, unauthenticated) — `POST /enquiry` (prospective student/teacher) + admin Enquiries tab; `GET /birthdays` (today's student + teacher birthdays, IST).
+
+## Multi-tenancy / deployment
+
+Each school = its own MySQL DB + its own PM2 process on a different port, sharing one EC2 + one built frontend (themed by hostname). Live: `sant_RLD` (PM2 `sant-RLD`:5000) and `idealradiant` (PM2 `idealradiant`:5001). After merging schema changes, run `npx sequelize-cli db:migrate` in **each** backend dir (own `.env` → own DB) before `pm2 restart`. Full infra/secrets in `AWSreadme.md`; onboarding a school in `onboard.md`.
+
+## Known Issues / Notes
+
+- `bcryptjs`, `jsonwebtoken`, `cors` may need manual `npm install` if missing from package.json.
+- No npm start/dev scripts; run `node src/server.js`.
+- No automated test framework.
+- `prod_sql/` (one-off data-load scripts) is git-ignored.

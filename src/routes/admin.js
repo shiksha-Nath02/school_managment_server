@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const {
-  addStudent, getStudents, getStudentById, updateStudent, removeStudent, getClasses,
+  addStudent, getStudents, getStudentById, updateStudent, removeStudent, getClasses, lookupStudent,
   getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory,
   getTeacherAttendanceById, getTeacherClassesById,
   verifyTeacherAttendance,
@@ -25,6 +25,7 @@ router.get('/settings/self-attendance', getSelfAttendanceSetting);
 router.post('/settings/self-attendance', toggleSelfAttendance);
 
 // Students
+router.get('/student-lookup', lookupStudent); // by admission number, for sell forms
 router.post('/students', addStudent);
 router.get('/students', getStudents);
 router.get('/students/:id', getStudentById);
