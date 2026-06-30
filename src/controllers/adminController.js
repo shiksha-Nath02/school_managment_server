@@ -50,7 +50,7 @@ const formatRecord = (r) => ({
 
 // ─────────── STUDENTS ───────────
 const addStudent = async (req, res) => {
-  const t = await sequelize.transaction();
+  let t;
   try {
     const {
       name, username, email, phone, password, class_id, roll_number, date_of_birth, address, admission_date,
@@ -86,6 +86,7 @@ const addStudent = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(plainPassword, 10);
+    t = await sequelize.transaction();
     const user = await User.create({ name, username, email: email || null, password: hashedPassword, role: 'student', phone: phone || null }, { transaction: t });
     const student = await Student.create({
       user_id: user.id, class_id, roll_number,
@@ -123,7 +124,7 @@ const addStudent = async (req, res) => {
     });
     res.status(201).json({ message: 'Student added successfully', student: fullStudent });
   } catch (error) {
-    await t.rollback();
+    if (t) await t.rollback();
     console.error('Add student error:', error);
     res.status(500).json({ message: 'Failed to add student' });
   }
@@ -275,7 +276,7 @@ const getAllTeachers = async (req, res) => {
 };
 
 const addTeacher = async (req, res) => {
-  const t = await sequelize.transaction();
+  let t;
   try {
     const { name, username, email, phone, password, subject, salary, joining_date } = req.body;
     if (!name || !username || !password)
@@ -288,6 +289,7 @@ const addTeacher = async (req, res) => {
       return res.status(409).json({ message: 'Email already registered' });
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    t = await sequelize.transaction();
     const user = await User.create({ name, username, email: email || null, password: hashedPassword, role: 'teacher', phone: phone || null }, { transaction: t });
     const teacher = await Teacher.create({
       user_id: user.id,
@@ -300,7 +302,7 @@ const addTeacher = async (req, res) => {
     });
     res.status(201).json({ message: 'Teacher added successfully', teacher: full });
   } catch (error) {
-    await t.rollback();
+    if (t) await t.rollback();
     console.error('Add teacher error:', error);
     res.status(500).json({ message: 'Failed to add teacher' });
   }
