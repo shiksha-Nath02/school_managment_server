@@ -12,6 +12,8 @@ const fmt = (txn) => ({
   admissionNumber: txn.admission_number,
   itemId:          txn.item_id,
   quantity:        txn.quantity,
+  discount:        parseFloat(txn.discount || 0),
+  gross:           parseFloat(txn.to_be_paid) + parseFloat(txn.discount || 0),
   toBePaid:        parseFloat(txn.to_be_paid),
   paid:            parseFloat(txn.paid),
   left:            parseFloat(txn.to_be_paid) - parseFloat(txn.paid),
@@ -124,7 +126,7 @@ const getTransactions = async (req, res) => {
 const sellItem = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { student_name, father_phone, admission_number, item_id, quantity, amount_paying } = req.body;
+    const { student_name, father_phone, admission_number, item_id, quantity, amount_paying, discount } = req.body;
     if (!student_name || !item_id) return res.status(400).json({ message: 'student_name and item_id are required' });
 
     const qty = parseInt(quantity, 10) || 1;
@@ -132,8 +134,10 @@ const sellItem = async (req, res) => {
     if (!item) return res.status(404).json({ message: 'Item not found' });
     if (item.units_available < qty) return res.status(400).json({ message: `Only ${item.units_available} units available` });
 
-    const toBePaid = parseFloat(item.price) * qty;
-    const paying  = Math.min(parseFloat(amount_paying) || 0, toBePaid);
+    const gross    = parseFloat(item.price) * qty;
+    const disc     = Math.min(Math.max(parseFloat(discount) || 0, 0), gross); // clamp to [0, gross]
+    const toBePaid = gross - disc;
+    const paying   = Math.min(parseFloat(amount_paying) || 0, toBePaid);
 
     // Link to a student by admission number (the FK survives later edits;
     // unmatched/walk-in sales just stay unlinked).
@@ -145,7 +149,7 @@ const sellItem = async (req, res) => {
 
     const txn = await UniformTransaction.create({
       student_name, father_phone, admission_number, student_id, item_id, quantity: qty,
-      to_be_paid: toBePaid, paid: paying,
+      to_be_paid: toBePaid, discount: disc, paid: paying,
     }, { transaction: t });
 
     if (paying > 0) {
