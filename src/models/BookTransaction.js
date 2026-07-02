@@ -10,6 +10,7 @@ const BookTransaction = sequelize.define('BookTransaction', {
   item_id:          { type: DataTypes.INTEGER, allowNull: false },
   quantity:         { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
   to_be_paid:       { type: DataTypes.DECIMAL(10, 2), allowNull: false },
+  discount:         { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
   paid:             { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
 }, { tableName: 'book_transactions', timestamps: true, underscored: true });
 

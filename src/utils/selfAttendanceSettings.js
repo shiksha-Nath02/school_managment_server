@@ -21,8 +21,10 @@ async function load() {
   }
 }
 
+// Enabled by default: teachers can self check-in every day unless the admin has
+// explicitly turned it OFF for that date (stored as false in the cache).
 function isEnabled(date) {
-  return cache[date] === true;
+  return cache[date] !== false;
 }
 
 function setEnabled(date, enabled) {
