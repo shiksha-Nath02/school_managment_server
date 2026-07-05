@@ -43,13 +43,58 @@ const getItems = async (req, res) => {
   }
 };
 
+const toApi = (i) => ({ id: i.id, itemName: i.item_name, size: i.size, price: parseFloat(i.price), unitsAvailable: i.units_available });
+
+// Accepts either a single size:
+//   { item_name, size, price, units_available }
+// or one item name with many sizes in a single submit:
+//   { item_name, variants: [ { size, price, units_available }, ... ] }
 const addItem = async (req, res) => {
+  const t = await sequelize.transaction();
   try {
-    const { item_name, size, price, units_available } = req.body;
-    if (!item_name || !size || !price) return res.status(400).json({ message: 'item_name, size, and price are required' });
-    const item = await UniformItem.create({ item_name, size, price: parseFloat(price), units_available: parseInt(units_available, 10) || 0 });
-    res.status(201).json({ message: 'Item added', item: { id: item.id, itemName: item.item_name, size: item.size, price: parseFloat(item.price), unitsAvailable: item.units_available } });
+    const { item_name, variants } = req.body;
+    if (!item_name) return res.status(400).json({ message: 'item_name is required' });
+
+    // Normalise both shapes into a list of { size, price, units_available }.
+    const rows = Array.isArray(variants) && variants.length
+      ? variants
+      : [{ size: req.body.size, price: req.body.price, units_available: req.body.units_available }];
+
+    // Validate every row up front so we don't create a partial set.
+    const seen = new Set();
+    for (const r of rows) {
+      if (!r.size || r.price == null || r.price === '') {
+        await t.rollback();
+        return res.status(400).json({ message: 'Each size needs a size and price' });
+      }
+      const key = String(r.size).trim().toLowerCase();
+      if (seen.has(key)) {
+        await t.rollback();
+        return res.status(400).json({ message: `Duplicate size "${r.size}" in this submission` });
+      }
+      seen.add(key);
+    }
+
+    const created = [];
+    for (const r of rows) {
+      const item = await UniformItem.create({
+        item_name,
+        size:            String(r.size).trim(),
+        price:           parseFloat(r.price),
+        units_available: parseInt(r.units_available, 10) || 0,
+      }, { transaction: t });
+      created.push(item);
+    }
+
+    await t.commit();
+    res.status(201).json({
+      message: `Added ${created.length} size${created.length === 1 ? '' : 's'}`,
+      items:   created.map(toApi),
+      item:    toApi(created[0]), // backwards-compatible single-item field
+    });
   } catch (e) {
+    await t.rollback();
+    console.error(e);
     res.status(500).json({ message: 'Failed to add item' });
   }
 };
