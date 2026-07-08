@@ -254,6 +254,9 @@ const recalculateChain = async (studentId, fromMonth, fromYear, transaction) => 
       }
     }
 
+    // Add any manual charge on this row (e.g. carried-forward previous dues)
+    runningPending += parseFloat(row.adjustment || 0);
+
     // Subtract the payment (negative amount_paid for reversals adds back)
     runningPending -= parseFloat(row.amount_paid);
 

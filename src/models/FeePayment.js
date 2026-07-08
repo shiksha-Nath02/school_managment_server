@@ -29,6 +29,12 @@ const FeePayment = sequelize.define('FeePayment', {
     allowNull: false,
     defaultValue: 0
   },
+  // Extra charge added to the running balance (e.g. carried-forward "previous dues").
+  adjustment: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0
+  },
   pending_after: {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false

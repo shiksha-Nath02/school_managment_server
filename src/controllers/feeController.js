@@ -248,7 +248,10 @@ const recordBulkPayment = async (req, res) => {
   const errors = [];
 
   for (const p of payments) {
-    if (!p.student_id || p.amount == null || parseFloat(p.amount) <= 0) continue;
+    const payAmount = parseFloat(p.amount) || 0;
+    const prevDues = Math.max(parseFloat(p.previous_dues) || 0, 0);
+    // Process a line if money is being paid OR previous dues are being added.
+    if (!p.student_id || (payAmount <= 0 && prevDues <= 0)) continue;
 
     const txn = await sequelize.transaction();
     try {
@@ -304,7 +307,8 @@ const recordBulkPayment = async (req, res) => {
         }
       }
 
-      const newPending = lastPending + currentMonthFee - currentMonthDiscount - parseFloat(p.amount);
+      // previous_dues is an opening-balance charge added to the running balance.
+      const newPending = lastPending + currentMonthFee - currentMonthDiscount + prevDues - payAmount;
       const sessionName = session ? session.name : 'UNKNOWN';
       const receiptNum = await generateReceiptNumber(sessionName, false);
 
@@ -312,35 +316,39 @@ const recordBulkPayment = async (req, res) => {
         student_id: p.student_id,
         billing_month,
         billing_year,
-        amount_paid: parseFloat(p.amount),
+        amount_paid: payAmount,
         fine_amount: 0,
+        adjustment: prevDues,
         pending_after: newPending,
         payment_date,
         payment_method: p.payment_method,
         receipt_number: receiptNum,
         is_system_generated: false,
         is_reversal: false,
-        remarks: p.remarks || null,
+        remarks: prevDues > 0 ? `${p.remarks ? p.remarks + ' | ' : ''}Previous dues added: ${prevDues}` : (p.remarks || null),
         received_by: req.user?.id || null
       }, { transaction: txn });
 
-      const student = await Student.findByPk(p.student_id, {
-        include: [{ model: User, as: 'user' }, { model: Class, as: 'class' }],
-        transaction: txn
-      });
-      const studentName = student?.user?.name || 'Unknown';
-      const className = student?.class ? `${student.class.class_name}-${student.class.section}` : '';
+      // Only log actual money received (a dues-only entry with no payment isn't income).
+      if (payAmount > 0) {
+        const student = await Student.findByPk(p.student_id, {
+          include: [{ model: User, as: 'user' }, { model: Class, as: 'class' }],
+          transaction: txn
+        });
+        const studentName = student?.user?.name || 'Unknown';
+        const className = student?.class ? `${student.class.class_name}-${student.class.section}` : '';
 
-      await PaymentLog.create({
-        type: 'fees',
-        direction: 'income',
-        amount: parseFloat(p.amount),
-        date: payment_date,
-        description: `Fee payment by ${studentName} (Class ${className}) — Receipt: ${receiptNum}`,
-        reference_id: paymentRow.id,
-        reference_type: 'fee_payments',
-        recorded_by: req.user?.id || null
-      }, { transaction: txn });
+        await PaymentLog.create({
+          type: 'fees',
+          direction: 'income',
+          amount: payAmount,
+          date: payment_date,
+          description: `Fee payment by ${studentName} (Class ${className}) — Receipt: ${receiptNum}`,
+          reference_id: paymentRow.id,
+          reference_type: 'fee_payments',
+          recorded_by: req.user?.id || null
+        }, { transaction: txn });
+      }
 
       await txn.commit();
       results.push({ student_id: p.student_id, receipt_number: receiptNum, pending_after: newPending, success: true });
@@ -422,11 +430,13 @@ const getStudentFeeHistory = async (req, res) => {
         is_system_generated: row.is_system_generated,
         is_reversal: row.is_reversal,
         reversal_for: row.reversal_for,
+        adjustment: parseFloat(row.adjustment || 0),
         remarks: row.remarks
       };
     });
 
     const totalPaid = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid), 0);
+    const totalAdjustment = payments.reduce((sum, p) => sum + parseFloat(p.adjustment || 0), 0);
 
     res.json({
       success: true,
@@ -451,7 +461,8 @@ const getStudentFeeHistory = async (req, res) => {
         effective_fee: parseFloat(fc.monthly_fee) - parseFloat(fc.discount)
       })),
       payments: monthlyBreakdown,
-      totalPaid
+      totalPaid,
+      totalAdjustment
     });
   } catch (error) {
     console.error('Error fetching student fee history:', error);

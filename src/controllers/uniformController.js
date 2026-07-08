@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const UniformItem = require('../models/UniformItem');
 const UniformTransaction = require('../models/UniformTransaction');
+const UniformTransactionItem = require('../models/UniformTransactionItem');
 const UniformPayment = require('../models/UniformPayment');
 const Student = require('../models/Student');
 
@@ -24,6 +25,16 @@ const fmt = (txn) => ({
     size:     txn.item.size,
     price:    parseFloat(txn.item.price),
   } : null,
+  // Multi-item sales list their lines here; legacy single-item sales leave this empty.
+  items: (txn.items || []).map((li) => ({
+    id:        li.id,
+    itemId:    li.item_id,
+    itemName:  li.item ? li.item.item_name : null,
+    size:      li.item ? li.item.size : null,
+    quantity:  li.quantity,
+    unitPrice: parseFloat(li.unit_price),
+    lineTotal: parseFloat(li.line_total),
+  })),
   payments: (txn.payments || []).map((p) => ({
     id:          p.id,
     amountPaid:  parseFloat(p.amount_paid),
@@ -146,6 +157,7 @@ const getTransactions = async (req, res) => {
       where,
       include: [
         { model: UniformItem, as: 'item' },
+        { model: UniformTransactionItem, as: 'items', include: [{ model: UniformItem, as: 'item' }] },
         { model: UniformPayment, as: 'payments', order: [['payment_date', 'ASC']] },
       ],
       order: [['created_at', 'DESC']],
@@ -219,6 +231,90 @@ const sellItem = async (req, res) => {
   }
 };
 
+// Multi-item sale: one bill for a student carrying several items, with a single
+// cart-level discount and a single "paying now" amount. Creates one parent
+// transaction (the sale) + one uniform_transaction_items row per line.
+const sellItems = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { student_name, father_phone, admission_number, items, amount_paying, discount } = req.body;
+    if (!student_name || !Array.isArray(items) || items.length === 0) {
+      await t.rollback();
+      return res.status(400).json({ message: 'student_name and at least one item are required' });
+    }
+
+    // Validate each line, lock the item row, and check stock.
+    let gross = 0;
+    let totalQty = 0;
+    const resolved = [];
+    for (const line of items) {
+      const qty = parseInt(line.quantity, 10) || 1;
+      if (qty <= 0) { await t.rollback(); return res.status(400).json({ message: 'Quantity must be at least 1' }); }
+      const item = await UniformItem.findByPk(line.item_id, { transaction: t, lock: t.LOCK.UPDATE });
+      if (!item) { await t.rollback(); return res.status(404).json({ message: `Item ${line.item_id} not found` }); }
+      if (item.units_available < qty) {
+        await t.rollback();
+        return res.status(400).json({ message: `Only ${item.units_available} of ${item.item_name} (${item.size}) available` });
+      }
+      const unitPrice = parseFloat(item.price);
+      const lineTotal = unitPrice * qty;
+      gross += lineTotal;
+      totalQty += qty;
+      resolved.push({ item, qty, unitPrice, lineTotal });
+    }
+
+    const disc     = Math.min(Math.max(parseFloat(discount) || 0, 0), gross); // clamp to [0, gross]
+    const toBePaid = gross - disc;
+    const paying   = Math.min(parseFloat(amount_paying) || 0, toBePaid);
+
+    let student_id = null;
+    if (admission_number) {
+      const s = await Student.findOne({ where: { admission_number }, attributes: ['id'] });
+      if (s) student_id = s.id;
+    }
+
+    // Parent sale row. item_id stays NULL — the lines live in the child table.
+    const txn = await UniformTransaction.create({
+      student_name, father_phone, admission_number, student_id,
+      item_id: null, quantity: totalQty,
+      to_be_paid: toBePaid, discount: disc, paid: paying,
+    }, { transaction: t });
+
+    for (const r of resolved) {
+      await UniformTransactionItem.create({
+        transaction_id: txn.id,
+        item_id:        r.item.id,
+        quantity:       r.qty,
+        unit_price:     r.unitPrice,
+        line_total:     r.lineTotal,
+      }, { transaction: t });
+      await r.item.update({ units_available: r.item.units_available - r.qty }, { transaction: t });
+    }
+
+    if (paying > 0) {
+      await UniformPayment.create({
+        transaction_id: txn.id,
+        amount_paid:    paying,
+        payment_date:   new Date().toISOString().split('T')[0],
+      }, { transaction: t });
+    }
+
+    await t.commit();
+
+    const full = await UniformTransaction.findByPk(txn.id, {
+      include: [
+        { model: UniformTransactionItem, as: 'items', include: [{ model: UniformItem, as: 'item' }] },
+        { model: UniformPayment, as: 'payments' },
+      ],
+    });
+    res.status(201).json({ message: 'Sale recorded', transaction: fmt(full) });
+  } catch (e) {
+    await t.rollback();
+    console.error(e);
+    res.status(500).json({ message: 'Failed to record sale' });
+  }
+};
+
 const addPayment = async (req, res) => {
   const t = await sequelize.transaction();
   try {
@@ -259,7 +355,19 @@ const deleteTransaction = async (req, res) => {
     if (!txn) return res.status(404).json({ message: 'Transaction not found' });
 
     await UniformPayment.destroy({ where: { transaction_id: txn.id }, transaction: t });
-    await UniformItem.increment('units_available', { by: txn.quantity, where: { id: txn.item_id }, transaction: t });
+
+    // Restore stock. Multi-item sales carry their lines in the child table;
+    // legacy single-item sales carry item_id/quantity inline.
+    const lines = await UniformTransactionItem.findAll({ where: { transaction_id: txn.id }, transaction: t });
+    if (lines.length > 0) {
+      for (const li of lines) {
+        await UniformItem.increment('units_available', { by: li.quantity, where: { id: li.item_id }, transaction: t });
+      }
+      await UniformTransactionItem.destroy({ where: { transaction_id: txn.id }, transaction: t });
+    } else if (txn.item_id) {
+      await UniformItem.increment('units_available', { by: txn.quantity, where: { id: txn.item_id }, transaction: t });
+    }
+
     await txn.destroy({ transaction: t });
     await t.commit();
 
@@ -270,4 +378,4 @@ const deleteTransaction = async (req, res) => {
   }
 };
 
-module.exports = { getItems, addItem, updateItem, deleteItem, getTransactions, sellItem, addPayment, deleteTransaction };
+module.exports = { getItems, addItem, updateItem, deleteItem, getTransactions, sellItem, sellItems, addPayment, deleteTransaction };
