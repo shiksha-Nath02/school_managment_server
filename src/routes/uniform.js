@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const {
   getItems, addItem, updateItem, deleteItem,
-  getTransactions, sellItem, addPayment, deleteTransaction,
+  getTransactions, sellItem, sellItems, addPayment, deleteTransaction,
 } = require('../controllers/uniformController');
 
 router.get('/uniform/items', getItems);
@@ -11,6 +11,7 @@ router.delete('/uniform/items/:id', deleteItem);
 
 router.get('/uniform/transactions', getTransactions);
 router.post('/uniform/transactions', sellItem);
+router.post('/uniform/transactions/multi', sellItems);
 router.post('/uniform/transactions/:id/payment', addPayment);
 router.delete('/uniform/transactions/:id', deleteTransaction);
 
