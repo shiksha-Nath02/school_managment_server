@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
-const { User, Student, Teacher, Class, TeacherAttendance, Attendance, Mark, StudentFee, FeePayment, Inventory, InventoryTransaction, Session, Timetable, UniformTransaction, UniformItem, UniformPayment, BookTransaction, BookItem, BookPayment, sequelize } = require('../models');
+const { User, Student, Teacher, Class, TeacherAttendance, Attendance, Mark, StudentFee, FeePayment, Inventory, InventoryTransaction, Session, Timetable, UniformTransaction, UniformItem, UniformTransactionItem, UniformPayment, BookTransaction, BookItem, BookPayment, sequelize } = require('../models');
 const { saveBase64Image } = require('../utils/imageHelper');
 const { publicUrl } = require('../utils/s3');
 const { generateStudentPassword } = require('../utils/credentials');
@@ -768,6 +768,7 @@ const getStudentInventory = async (req, res) => {
         where: { student_id: student.id },
         include: [
           { model: UniformItem, as: 'item' },
+          { model: UniformTransactionItem, as: 'items', include: [{ model: UniformItem, as: 'item' }] },
           { model: UniformPayment, as: 'payments', order: [['payment_date', 'ASC']] },
         ],
         order: [['created_at', 'DESC']],
@@ -786,7 +787,11 @@ const getStudentInventory = async (req, res) => {
       id:          t.id,
       type,
       date:        t.created_at,
-      itemName:    type === 'uniform' ? `${t.item?.item_name || '—'} (${t.item?.size || '—'})` : (t.item?.book_name || '—'),
+      itemName:    type === 'uniform'
+        ? (t.items && t.items.length > 0
+            ? t.items.map((li) => `${li.item?.item_name || '—'}${li.item?.size ? ` (${li.item.size})` : ''}${li.quantity > 1 ? ` ×${li.quantity}` : ''}`).join(', ')
+            : `${t.item?.item_name || '—'} (${t.item?.size || '—'})`)
+        : (t.item?.book_name || '—'),
       className:   type === 'book'    ? (t.item?.class_name || null) : null,
       subject:     type === 'book'    ? (t.item?.subject    || null) : null,
       quantity:    t.quantity,
