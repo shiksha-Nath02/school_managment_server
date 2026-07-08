@@ -16,6 +16,7 @@ const Inventory = require('./Inventory');
 const InventoryTransaction = require('./InventoryTransaction');
 const UniformItem = require('./UniformItem');
 const UniformTransaction = require('./UniformTransaction');
+const UniformTransactionItem = require('./UniformTransactionItem');
 const UniformPayment = require('./UniformPayment');
 const BookItem = require('./BookItem');
 const BookTransaction = require('./BookTransaction');
@@ -102,6 +103,11 @@ UniformItem.hasMany(UniformTransaction, { foreignKey: 'item_id', as: 'transactio
 UniformTransaction.belongsTo(UniformItem, { foreignKey: 'item_id', as: 'item' });
 UniformTransaction.hasMany(UniformPayment, { foreignKey: 'transaction_id', as: 'payments' });
 UniformPayment.belongsTo(UniformTransaction, { foreignKey: 'transaction_id', as: 'transaction' });
+// Multi-item sales: a transaction (sale) can carry many line items
+UniformTransaction.hasMany(UniformTransactionItem, { foreignKey: 'transaction_id', as: 'items' });
+UniformTransactionItem.belongsTo(UniformTransaction, { foreignKey: 'transaction_id', as: 'transaction' });
+UniformTransactionItem.belongsTo(UniformItem, { foreignKey: 'item_id', as: 'item' });
+UniformItem.hasMany(UniformTransactionItem, { foreignKey: 'item_id', as: 'saleLines' });
 
 // StudentDocument associations
 Student.hasMany(StudentDocument, { foreignKey: 'student_id', as: 'documents' });
@@ -132,6 +138,7 @@ module.exports = {
   InventoryTransaction,
   UniformItem,
   UniformTransaction,
+  UniformTransactionItem,
   UniformPayment,
   BookItem,
   BookTransaction,

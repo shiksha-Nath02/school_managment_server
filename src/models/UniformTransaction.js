@@ -7,7 +7,7 @@ const UniformTransaction = sequelize.define('UniformTransaction', {
   father_phone:     { type: DataTypes.STRING(20),  allowNull: true },
   admission_number: { type: DataTypes.STRING(50),  allowNull: true },
   student_id:       { type: DataTypes.INTEGER, allowNull: true },
-  item_id:          { type: DataTypes.INTEGER, allowNull: false },
+  item_id:          { type: DataTypes.INTEGER, allowNull: true }, // legacy single-item; NULL for multi-item sales (see uniform_transaction_items)
   quantity:         { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
   to_be_paid:       { type: DataTypes.DECIMAL(10, 2), allowNull: false },
   discount:         { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
