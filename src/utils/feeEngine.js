@@ -1,5 +1,6 @@
 const { FeePayment, StudentFee, Session, Student } = require('../models');
 const { Op } = require('sequelize');
+const sequelize = require('../config/database');
 
 /**
  * Get the session that a given month/year belongs to.
@@ -263,6 +264,73 @@ const recalculateChain = async (studentId, fromMonth, fromYear, transaction) => 
   }
 };
 
+/**
+ * Ensure a student's ledger is billed up to AND INCLUDING the given target month.
+ *
+ * This materializes the "no payment received yet" gap rows so that a student's
+ * pending balance shows up on the dues/report screens WITHOUT anyone having to
+ * record a payment first. It reuses generateGapRows (which bills up to but NOT
+ * including its target), so we pass the month AFTER the target as the stop point.
+ *
+ * Idempotent: re-running bills nothing new once the ledger reaches the target,
+ * because generation always starts from the student's latest existing row.
+ * Only months that fall inside a session and are not excluded get a row.
+ *
+ * @returns {boolean} true if any new rows were created.
+ */
+const ensureBilledUpTo = async (studentId, targetMonth, targetYear, transaction = null) => {
+  // Run inside a transaction so we can lock the student row. Because the auto-bill
+  // screens (dues, classwise, history) issue this on a GET, two concurrent loads
+  // could otherwise each see "no ledger" and both insert the same month's row.
+  // Locking the student row serializes them: the second call sees the first's
+  // committed rows and generates nothing. Self-manage the txn if none was passed.
+  if (!transaction) {
+    return sequelize.transaction((t) => ensureBilledUpTo(studentId, targetMonth, targetYear, t));
+  }
+
+  const txnOpts = { transaction };
+
+  // Lock the student row to serialize concurrent generation for this student.
+  const student = await Student.findByPk(studentId, { transaction, lock: transaction.LOCK.UPDATE });
+  if (!student) return false;
+
+  const lastRow = await FeePayment.findOne({
+    where: { student_id: studentId },
+    order: [['billing_year', 'DESC'], ['billing_month', 'DESC'], ['id', 'DESC']],
+    ...txnOpts
+  });
+
+  let lastPending = 0;
+  let lastMonth = null;
+  let lastYear = null;
+
+  if (lastRow) {
+    lastPending = parseFloat(lastRow.pending_after);
+    lastMonth = lastRow.billing_month;
+    lastYear = lastRow.billing_year;
+  } else {
+    // No ledger yet — start from the month before admission (same rule as recordPayment)
+    if (!student.admission_date) return false;
+    const admDate = new Date(student.admission_date);
+    lastMonth = admDate.getMonth() + 1;
+    lastYear = admDate.getFullYear();
+    if (lastMonth === 1) { lastMonth = 12; lastYear -= 1; }
+    else { lastMonth -= 1; }
+  }
+
+  // Bill up to and INCLUDING the target month → stop one month past it.
+  const stop = nextMonth(targetMonth, targetYear);
+  const { gapRows } = await generateGapRows(
+    studentId, lastMonth, lastYear, lastPending, stop.month, stop.year
+  );
+
+  if (gapRows.length > 0) {
+    await FeePayment.bulkCreate(gapRows, txnOpts);
+    return true;
+  }
+  return false;
+};
+
 module.exports = {
   getSessionForMonth,
   getStudentFeeForSession,
@@ -274,5 +342,6 @@ module.exports = {
   generateGapRows,
   generateReceiptNumber,
   calculateFine,
-  recalculateChain
+  recalculateChain,
+  ensureBilledUpTo
 };

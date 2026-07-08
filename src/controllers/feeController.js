@@ -8,8 +8,15 @@ const {
   generateGapRows,
   generateReceiptNumber,
   calculateFine,
-  recalculateChain
+  recalculateChain,
+  ensureBilledUpTo
 } = require('../utils/feeEngine');
+
+// Current month/year in IST (school runs in India; server may be on UTC).
+const currentBillingPeriod = () => {
+  const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  return { month: nowIST.getUTCMonth() + 1, year: nowIST.getUTCFullYear() };
+};
 
 // ──────────────────────────────────────────────────
 // RECORD A SINGLE PAYMENT
@@ -371,6 +378,15 @@ const getStudentFeeHistory = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
+    // Materialize any unbilled months (incl. current) before reading the ledger,
+    // so a student's pending shows up without a payment having been recorded.
+    try {
+      const { month: curMonth, year: curYear } = currentBillingPeriod();
+      await ensureBilledUpTo(parseInt(studentId), curMonth, curYear);
+    } catch (genErr) {
+      console.error(`Fee auto-bill failed for student ${studentId}:`, genErr.message);
+    }
+
     // All fee payment rows in chronological order
     const payments = await FeePayment.findAll({
       where: { student_id: studentId },
@@ -463,8 +479,17 @@ const getStudentsWithDues = async (req, res) => {
     });
 
     const studentsWithDues = [];
+    const { month: curMonth, year: curYear } = currentBillingPeriod();
 
     for (const student of students) {
+      // Materialize any unbilled months (incl. current) so pending shows up
+      // even when no payment has been recorded yet. Idempotent per student.
+      try {
+        await ensureBilledUpTo(student.id, curMonth, curYear);
+      } catch (genErr) {
+        console.error(`Fee auto-bill failed for student ${student.id}:`, genErr.message);
+      }
+
       const lastRow = await FeePayment.findOne({
         where: { student_id: student.id },
         order: [['billing_year', 'DESC'], ['billing_month', 'DESC'], ['id', 'DESC']]
@@ -529,6 +554,7 @@ const getClasswiseReport = async (req, res) => {
     });
 
     const report = [];
+    const { month: curMonth, year: curYear } = currentBillingPeriod();
 
     for (const cls of classes) {
       let totalCollected = 0;
@@ -536,6 +562,13 @@ const getClasswiseReport = async (req, res) => {
       const studentCount = cls.students?.length || 0;
 
       for (const student of (cls.students || [])) {
+        // Materialize unbilled months (incl. current) so pending is accurate.
+        try {
+          await ensureBilledUpTo(student.id, curMonth, curYear);
+        } catch (genErr) {
+          console.error(`Fee auto-bill failed for student ${student.id}:`, genErr.message);
+        }
+
         // Build payment where clause
         const paymentWhere = {
           student_id: student.id,
