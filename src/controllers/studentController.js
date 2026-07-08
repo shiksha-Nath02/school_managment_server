@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const {
   User, Student, Class, Attendance, Mark, FeePayment,
-  UniformTransaction, UniformItem, UniformPayment,
+  UniformTransaction, UniformItem, UniformTransactionItem, UniformPayment,
   BookTransaction, BookItem, BookPayment,
 } = require('../models');
 const { calculateFine } = require('../utils/feeEngine');
@@ -237,6 +237,7 @@ const getMyPurchases = async (req, res) => {
         where: { student_id: student.id },
         include: [
           { model: UniformItem, as: 'item' },
+          { model: UniformTransactionItem, as: 'items', include: [{ model: UniformItem, as: 'item' }] },
           { model: UniformPayment, as: 'payments', order: [['payment_date', 'ASC']] },
         ],
         order: [['created_at', 'DESC']],
@@ -256,7 +257,9 @@ const getMyPurchases = async (req, res) => {
       type,
       date:      t.created_at,
       itemName:  type === 'uniform'
-        ? `${t.item?.item_name || '—'}${t.item?.size ? ` (${t.item.size})` : ''}`
+        ? (t.items && t.items.length > 0
+            ? t.items.map((li) => `${li.item?.item_name || '—'}${li.item?.size ? ` (${li.item.size})` : ''}${li.quantity > 1 ? ` ×${li.quantity}` : ''}`).join(', ')
+            : `${t.item?.item_name || '—'}${t.item?.size ? ` (${t.item.size})` : ''}`)
         : (t.item?.book_name || '—'),
       className: type === 'book' ? (t.item?.class_name || null) : null,
       subject:   type === 'book' ? (t.item?.subject || null) : null,
