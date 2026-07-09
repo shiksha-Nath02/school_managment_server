@@ -50,6 +50,12 @@ const Session = sequelize.define('Session', {
     allowNull: true,
     defaultValue: 10
   },
+  // Annual admission charge for this session; new students inherit it.
+  admission_fee: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0
+  },
   is_active: {
     type: DataTypes.BOOLEAN,
     allowNull: false,

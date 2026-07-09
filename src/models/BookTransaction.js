@@ -12,6 +12,6 @@ const BookTransaction = sequelize.define('BookTransaction', {
   to_be_paid:       { type: DataTypes.DECIMAL(10, 2), allowNull: false },
   discount:         { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
   paid:             { type: DataTypes.DECIMAL(10, 2), allowNull: false, defaultValue: 0 },
-}, { tableName: 'book_transactions', timestamps: true, underscored: true });
+}, { tableName: 'book_transactions', timestamps: true, underscored: true, paranoid: true });
 
 module.exports = BookTransaction;

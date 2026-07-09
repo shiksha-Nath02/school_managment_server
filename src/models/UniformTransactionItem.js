@@ -10,6 +10,6 @@ const UniformTransactionItem = sequelize.define('UniformTransactionItem', {
   quantity:       { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
   unit_price:     { type: DataTypes.DECIMAL(10, 2), allowNull: false },
   line_total:     { type: DataTypes.DECIMAL(10, 2), allowNull: false },
-}, { tableName: 'uniform_transaction_items', timestamps: true, underscored: true });
+}, { tableName: 'uniform_transaction_items', timestamps: true, underscored: true, paranoid: true });
 
 module.exports = UniformTransactionItem;

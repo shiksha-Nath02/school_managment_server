@@ -14,7 +14,11 @@ const Expense = sequelize.define('Expense', {
   deduction:    { type: DataTypes.DECIMAL(10, 2),  allowNull: true }, // penalty/deduction
 }, {
   tableName:  'expenses',
-  timestamps: false,
+  // Enable only deletedAt (no created/updated columns exist) for soft delete.
+  timestamps:  true,
+  createdAt:   false,
+  updatedAt:   false,
+  paranoid:    true,
   underscored: true,
 });
 
