@@ -7,6 +7,6 @@ const UniformPayment = sequelize.define('UniformPayment', {
   amount_paid:    { type: DataTypes.DECIMAL(10, 2), allowNull: false },
   payment_date:   { type: DataTypes.DATEONLY, allowNull: false },
   remarks:        { type: DataTypes.STRING(255), allowNull: true },
-}, { tableName: 'uniform_payments', timestamps: true, underscored: true });
+}, { tableName: 'uniform_payments', timestamps: true, underscored: true, paranoid: true });
 
 module.exports = UniformPayment;
