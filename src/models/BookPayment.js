@@ -7,6 +7,6 @@ const BookPayment = sequelize.define('BookPayment', {
   amount_paid:    { type: DataTypes.DECIMAL(10, 2), allowNull: false },
   payment_date:   { type: DataTypes.DATEONLY, allowNull: false },
   remarks:        { type: DataTypes.STRING(255), allowNull: true },
-}, { tableName: 'book_payments', timestamps: true, underscored: true });
+}, { tableName: 'book_payments', timestamps: true, underscored: true, paranoid: true });
 
 module.exports = BookPayment;
