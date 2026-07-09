@@ -1,4 +1,4 @@
-const { FeePayment, StudentFee, Student, User, Class, Session, PaymentLog, UniformPayment, UniformTransaction, BookPayment, BookTransaction, Expense } = require('../models');
+const { FeePayment, StudentFee, Student, User, Class, Session, PaymentLog, UniformPayment, UniformTransaction, BookPayment, BookTransaction, Expense, AdmissionFee } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const {
@@ -246,15 +246,24 @@ const recordBulkPayment = async (req, res) => {
 
   const results = [];
   const errors = [];
+  const activeSession = await Session.findOne({ where: { is_active: true } });
 
   for (const p of payments) {
     const payAmount = parseFloat(p.amount) || 0;
     const prevDues = Math.max(parseFloat(p.previous_dues) || 0, 0);
-    // Process a line if money is being paid OR previous dues are being added.
-    if (!p.student_id || (payAmount <= 0 && prevDues <= 0)) continue;
+    const admPay = Math.max(parseFloat(p.adm_pay) || 0, 0);
+    const hasAdmDiscount = p.adm_discount !== undefined && p.adm_discount !== null && p.adm_discount !== '';
+    const admDiscount = Math.max(parseFloat(p.adm_discount) || 0, 0);
+    const doMonthly = payAmount > 0 || prevDues > 0;
+    const doAdmission = (admPay > 0 || hasAdmDiscount) && !!activeSession;
+    // Process a line if there is monthly OR admission activity.
+    if (!p.student_id || (!doMonthly && !doAdmission)) continue;
 
     const txn = await sequelize.transaction();
     try {
+      let receiptNum = null, newPending = null;
+
+      if (doMonthly) {
       const lastRow = await FeePayment.findOne({
         where: { student_id: p.student_id },
         order: [['billing_year', 'DESC'], ['billing_month', 'DESC'], ['id', 'DESC']],
@@ -308,9 +317,9 @@ const recordBulkPayment = async (req, res) => {
       }
 
       // previous_dues is an opening-balance charge added to the running balance.
-      const newPending = lastPending + currentMonthFee - currentMonthDiscount + prevDues - payAmount;
+      newPending = lastPending + currentMonthFee - currentMonthDiscount + prevDues - payAmount;
       const sessionName = session ? session.name : 'UNKNOWN';
-      const receiptNum = await generateReceiptNumber(sessionName, false);
+      receiptNum = await generateReceiptNumber(sessionName, false);
 
       const paymentRow = await FeePayment.create({
         student_id: p.student_id,
@@ -349,9 +358,49 @@ const recordBulkPayment = async (req, res) => {
           recorded_by: req.user?.id || null
         }, { transaction: txn });
       }
+      } // end if (doMonthly)
+
+      // ── Admission fee (independent of monthly) ──
+      let admissionPaid = 0;
+      if (doAdmission) {
+        const adm = await AdmissionFee.findOne({
+          where: { student_id: p.student_id, session_id: activeSession.id },
+          lock: txn.LOCK.UPDATE,
+          transaction: txn
+        });
+        if (adm) {
+          const newDiscount = hasAdmDiscount ? admDiscount : parseFloat(adm.discount);
+          await adm.update({
+            discount: newDiscount,
+            paid_amount: parseFloat(adm.paid_amount) + admPay,
+            assumed_paid: false, // a real payment/edit drops the pre-tracking assumption
+          }, { transaction: txn });
+
+          // Only real money collected counts as profit.
+          if (admPay > 0) {
+            const st = await Student.findByPk(p.student_id, {
+              include: [{ model: User, as: 'user' }, { model: Class, as: 'class' }],
+              transaction: txn
+            });
+            const sName = st?.user?.name || 'Unknown';
+            const cName = st?.class ? `${st.class.class_name}-${st.class.section}` : '';
+            await PaymentLog.create({
+              type: 'admission',
+              direction: 'income',
+              amount: admPay,
+              date: payment_date,
+              description: `Admission fee by ${sName} (Class ${cName})`,
+              reference_id: adm.id,
+              reference_type: 'admission_fees',
+              recorded_by: req.user?.id || null
+            }, { transaction: txn });
+            admissionPaid = admPay;
+          }
+        }
+      }
 
       await txn.commit();
-      results.push({ student_id: p.student_id, receipt_number: receiptNum, pending_after: newPending, success: true });
+      results.push({ student_id: p.student_id, receipt_number: receiptNum, pending_after: newPending, admission_paid: admissionPaid, success: true });
     } catch (err) {
       await txn.rollback();
       console.error(`Error recording bulk payment for student ${p.student_id}:`, err);
@@ -438,6 +487,27 @@ const getStudentFeeHistory = async (req, res) => {
     const totalPaid = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid), 0);
     const totalAdjustment = payments.reduce((sum, p) => sum + parseFloat(p.adjustment || 0), 0);
 
+    // Admission fee for the active session (drives the bulk-screen Adm Fee column).
+    const activeSession = await Session.findOne({ where: { is_active: true } });
+    let admissionFee = null;
+    if (activeSession) {
+      const adm = await AdmissionFee.findOne({
+        where: { student_id: studentId, session_id: activeSession.id }
+      });
+      if (adm) {
+        const charge = parseFloat(adm.annual_charge);
+        const disc = parseFloat(adm.discount);
+        const paid = parseFloat(adm.paid_amount);
+        admissionFee = {
+          annual_charge: charge,
+          discount: disc,
+          paid_amount: paid,
+          assumed_paid: adm.assumed_paid,
+          due: adm.assumed_paid ? 0 : Math.max(0, charge - disc - paid),
+        };
+      }
+    }
+
     res.json({
       success: true,
       student: {
@@ -462,7 +532,8 @@ const getStudentFeeHistory = async (req, res) => {
       })),
       payments: monthlyBreakdown,
       totalPaid,
-      totalAdjustment
+      totalAdjustment,
+      admissionFee
     });
   } catch (error) {
     console.error('Error fetching student fee history:', error);

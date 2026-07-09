@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
-const { User, Student, Teacher, Class, TeacherAttendance, Attendance, Mark, StudentFee, FeePayment, Inventory, InventoryTransaction, Session, Timetable, UniformTransaction, UniformItem, UniformTransactionItem, UniformPayment, BookTransaction, BookItem, BookPayment, sequelize } = require('../models');
+const { User, Student, Teacher, Class, TeacherAttendance, Attendance, Mark, StudentFee, FeePayment, Inventory, InventoryTransaction, Session, Timetable, UniformTransaction, UniformItem, UniformTransactionItem, UniformPayment, BookTransaction, BookItem, BookPayment, AdmissionFee, sequelize } = require('../models');
 const { saveBase64Image } = require('../utils/imageHelper');
 const { publicUrl } = require('../utils/s3');
 const { generateStudentPassword } = require('../utils/credentials');
@@ -114,6 +114,21 @@ const addStudent = async (req, res) => {
       pen_number: pen_number || null,
       apaar_id: apaar_id || null,
     }, { transaction: t });
+
+    // Give the new student a pending admission-fee row for the active session
+    // (inherits the session's annual charge). New = not assumed paid.
+    const activeSession = await Session.findOne({ where: { is_active: true }, transaction: t });
+    if (activeSession) {
+      await AdmissionFee.create({
+        student_id: student.id,
+        session_id: activeSession.id,
+        annual_charge: parseFloat(activeSession.admission_fee) || 0,
+        discount: 0,
+        paid_amount: 0,
+        assumed_paid: false,
+      }, { transaction: t });
+    }
+
     await t.commit();
 
     const fullStudent = await Student.findByPk(student.id, {

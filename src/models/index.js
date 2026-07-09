@@ -9,6 +9,7 @@ const Timetable = require('./Timetable');
 const ClassTask = require('./ClassTask');
 const Session = require('./Session');
 const StudentFee = require('./StudentFee');
+const AdmissionFee = require('./AdmissionFee');
 const FeePayment = require('./FeePayment');
 const PaymentLog = require('./PaymentLog');
 const Mark = require('./Mark');
@@ -80,6 +81,12 @@ StudentFee.belongsTo(Session, { foreignKey: 'session_id', as: 'session' });
 Student.hasMany(StudentFee, { foreignKey: 'student_id', as: 'feeConfigs' });
 StudentFee.belongsTo(Student, { foreignKey: 'student_id', as: 'student' });
 
+// AdmissionFee associations
+Session.hasMany(AdmissionFee, { foreignKey: 'session_id', as: 'admissionFees' });
+AdmissionFee.belongsTo(Session, { foreignKey: 'session_id', as: 'session' });
+Student.hasMany(AdmissionFee, { foreignKey: 'student_id', as: 'admissionFees' });
+AdmissionFee.belongsTo(Student, { foreignKey: 'student_id', as: 'student' });
+
 // FeePayment associations
 Student.hasMany(FeePayment, { foreignKey: 'student_id', as: 'feePayments' });
 FeePayment.belongsTo(Student, { foreignKey: 'student_id', as: 'student' });
@@ -131,6 +138,7 @@ module.exports = {
   ClassTask,
   Session,
   StudentFee,
+  AdmissionFee,
   FeePayment,
   PaymentLog,
   Mark,
