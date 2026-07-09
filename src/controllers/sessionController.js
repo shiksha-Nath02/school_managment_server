@@ -61,7 +61,7 @@ const createSession = async (req, res) => {
   try {
     const {
       name, start_month, start_year,
-      excluded_months, fine_enabled, fine_per_day, grace_period_days,
+      excluded_months, fine_enabled, fine_per_day, grace_period_days, admission_fee,
       default_monthly_fee, copy_from_session_id, fee_increase_percent,
       student_fees // optional: array of { student_id, monthly_fee, discount, discount_reason }
     } = req.body;
@@ -110,6 +110,7 @@ const createSession = async (req, res) => {
       fine_enabled: fine_enabled || false,
       fine_per_day: fine_per_day || 0,
       grace_period_days: grace_period_days || 10,
+      admission_fee: admission_fee || 0,
       is_active: true,
       created_by: req.user?.id || null
     }, { transaction: txn });
