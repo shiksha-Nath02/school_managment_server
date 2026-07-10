@@ -17,7 +17,7 @@ const fmt = (txn) => ({
   toBePaid:        parseFloat(txn.to_be_paid),
   paid:            parseFloat(txn.paid),
   left:            parseFloat(txn.to_be_paid) - parseFloat(txn.paid),
-  createdAt:       txn.created_at,
+  createdAt:       txn.createdAt,
   item:            txn.item ? {
     id:        txn.item.id,
     bookName:  txn.item.book_name,
@@ -108,17 +108,16 @@ const getTransactions = async (req, res) => {
       order: [['created_at', 'DESC']],
     });
 
-    const admNos = [...new Set(txns.map(t => t.admission_number).filter(Boolean))];
+    // Category comes from the linked student via the student_id FK — NOT from
+    // admission_number (which is not the students PK; matching the two is wrong).
+    const studentIds = [...new Set(txns.map(t => t.student_id).filter(Boolean))];
     const studentMap = {};
-    if (admNos.length) {
-      const ids = admNos.map(n => parseInt(n, 10)).filter(n => !isNaN(n));
-      if (ids.length) {
-        const students = await Student.findAll({ where: { id: ids }, attributes: ['id', 'category'] });
-        for (const s of students) studentMap[String(s.id)] = s.category;
-      }
+    if (studentIds.length) {
+      const students = await Student.findAll({ where: { id: studentIds }, attributes: ['id', 'category'] });
+      for (const s of students) studentMap[String(s.id)] = s.category;
     }
 
-    res.json({ transactions: txns.map(t => ({ ...fmt(t), studentCategory: studentMap[String(t.admission_number)] || null })) });
+    res.json({ transactions: txns.map(t => ({ ...fmt(t), studentCategory: studentMap[String(t.student_id)] || null })) });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: 'Failed to fetch transactions' });
