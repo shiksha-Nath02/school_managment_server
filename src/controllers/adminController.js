@@ -801,7 +801,7 @@ const getStudentInventory = async (req, res) => {
     const mapTxn = (t, type) => ({
       id:          t.id,
       type,
-      date:        t.created_at,
+      date:        t.createdAt,
       itemName:    type === 'uniform'
         ? (t.items && t.items.length > 0
             ? t.items.map((li) => `${li.item?.item_name || '—'}${li.item?.size ? ` (${li.item.size})` : ''}${li.quantity > 1 ? ` ×${li.quantity}` : ''}`).join(', ')
