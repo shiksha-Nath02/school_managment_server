@@ -268,10 +268,13 @@ const recordBulkPayment = async (req, res) => {
   for (const p of payments) {
     const payAmount = parseFloat(p.amount) || 0;
     const prevDues = Math.max(parseFloat(p.previous_dues) || 0, 0);
+    // Opening advance: a credit paid ahead before tracking started. Lowers the
+    // running balance but is NOT booked as income (mirror of previous dues).
+    const advance = Math.max(parseFloat(p.advance) || 0, 0);
     const admPay = Math.max(parseFloat(p.adm_pay) || 0, 0);
     const hasAdmDiscount = p.adm_discount !== undefined && p.adm_discount !== null && p.adm_discount !== '';
     const admDiscount = Math.max(parseFloat(p.adm_discount) || 0, 0);
-    const doMonthly = payAmount > 0 || prevDues > 0;
+    const doMonthly = payAmount > 0 || prevDues > 0 || advance > 0;
     const doAdmission = (admPay > 0 || hasAdmDiscount) && !!activeSession;
     // Process a line if there is monthly OR admission activity.
     if (!p.student_id || (!doMonthly && !doAdmission)) continue;
@@ -333,10 +336,17 @@ const recordBulkPayment = async (req, res) => {
         }
       }
 
-      // previous_dues is an opening-balance charge added to the running balance.
-      newPending = lastPending + currentMonthFee - currentMonthDiscount + prevDues - payAmount;
+      // previous_dues is an opening-balance charge added to the running balance;
+      // advance is an opening credit subtracted from it.
+      newPending = lastPending + currentMonthFee - currentMonthDiscount + prevDues - advance - payAmount;
       const sessionName = session ? session.name : 'UNKNOWN';
       receiptNum = await generateReceiptNumber(sessionName, false);
+
+      // Build the remarks from any of: caller note, previous dues, advance.
+      const notes = [];
+      if (p.remarks) notes.push(p.remarks);
+      if (prevDues > 0) notes.push(`Previous dues added: ${prevDues}`);
+      if (advance > 0) notes.push(`Advance credit added: ${advance}`);
 
       const paymentRow = await FeePayment.create({
         student_id: p.student_id,
@@ -345,13 +355,14 @@ const recordBulkPayment = async (req, res) => {
         amount_paid: payAmount,
         fine_amount: 0,
         adjustment: prevDues,
+        advance,
         pending_after: newPending,
         payment_date,
         payment_method: p.payment_method,
         receipt_number: receiptNum,
         is_system_generated: false,
         is_reversal: false,
-        remarks: prevDues > 0 ? `${p.remarks ? p.remarks + ' | ' : ''}Previous dues added: ${prevDues}` : (p.remarks || null),
+        remarks: notes.length ? notes.join(' | ') : null,
         received_by: req.user?.id || null
       }, { transaction: txn });
 
@@ -497,12 +508,14 @@ const getStudentFeeHistory = async (req, res) => {
         is_reversal: row.is_reversal,
         reversal_for: row.reversal_for,
         adjustment: parseFloat(row.adjustment || 0),
+        advance: parseFloat(row.advance || 0),
         remarks: row.remarks
       };
     });
 
     const totalPaid = payments.reduce((sum, p) => sum + parseFloat(p.amount_paid), 0);
     const totalAdjustment = payments.reduce((sum, p) => sum + parseFloat(p.adjustment || 0), 0);
+    const totalAdvance = payments.reduce((sum, p) => sum + parseFloat(p.advance || 0), 0);
 
     // Admission fee for the active session (drives the bulk-screen Adm Fee column).
     const activeSession = await Session.findOne({ where: { is_active: true } });
@@ -550,6 +563,7 @@ const getStudentFeeHistory = async (req, res) => {
       payments: monthlyBreakdown,
       totalPaid,
       totalAdjustment,
+      totalAdvance,
       admissionFee
     });
   } catch (error) {

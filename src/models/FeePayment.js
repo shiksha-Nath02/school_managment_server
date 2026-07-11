@@ -35,6 +35,13 @@ const FeePayment = sequelize.define('FeePayment', {
     allowNull: false,
     defaultValue: 0
   },
+  // Opening credit SUBTRACTED from the running balance (money paid ahead before
+  // the ledger started). Mirror of `adjustment`; never logged as income.
+  advance: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0
+  },
   pending_after: {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false
