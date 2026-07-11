@@ -6,6 +6,11 @@ const UniformTransactionItem = require('../models/UniformTransactionItem');
 const UniformPayment = require('../models/UniformPayment');
 const Student = require('../models/Student');
 
+// Accepted payment methods (mirrors fee_payments.payment_method). Anything else
+// (or empty) is stored as NULL rather than rejected, so a sale never fails on it.
+const PAYMENT_METHODS = ['cash', 'upi', 'cheque', 'bank_transfer', 'online'];
+const normMethod = (m) => (PAYMENT_METHODS.includes(m) ? m : null);
+
 const fmt = (txn) => ({
   id:              txn.id,
   studentName:     txn.student_name,
@@ -36,10 +41,11 @@ const fmt = (txn) => ({
     lineTotal: parseFloat(li.line_total),
   })),
   payments: (txn.payments || []).map((p) => ({
-    id:          p.id,
-    amountPaid:  parseFloat(p.amount_paid),
-    paymentDate: p.payment_date,
-    remarks:     p.remarks,
+    id:            p.id,
+    amountPaid:    parseFloat(p.amount_paid),
+    paymentDate:   p.payment_date,
+    paymentMethod: p.payment_method,
+    remarks:       p.remarks,
   })),
 });
 
@@ -182,7 +188,7 @@ const getTransactions = async (req, res) => {
 const sellItem = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { student_name, father_phone, admission_number, item_id, quantity, amount_paying, discount } = req.body;
+    const { student_name, father_phone, admission_number, item_id, quantity, amount_paying, discount, payment_method } = req.body;
     if (!student_name || !item_id) return res.status(400).json({ message: 'student_name and item_id are required' });
 
     const qty = parseInt(quantity, 10) || 1;
@@ -213,6 +219,7 @@ const sellItem = async (req, res) => {
         transaction_id: txn.id,
         amount_paid:    paying,
         payment_date:   new Date().toISOString().split('T')[0],
+        payment_method: normMethod(payment_method),
       }, { transaction: t });
     }
 
@@ -236,7 +243,7 @@ const sellItem = async (req, res) => {
 const sellItems = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { student_name, father_phone, admission_number, items, amount_paying, discount } = req.body;
+    const { student_name, father_phone, admission_number, items, amount_paying, discount, payment_method } = req.body;
     if (!student_name || !Array.isArray(items) || items.length === 0) {
       await t.rollback();
       return res.status(400).json({ message: 'student_name and at least one item are required' });
@@ -295,6 +302,7 @@ const sellItems = async (req, res) => {
         transaction_id: txn.id,
         amount_paid:    paying,
         payment_date:   new Date().toISOString().split('T')[0],
+        payment_method: normMethod(payment_method),
       }, { transaction: t });
     }
 
@@ -323,7 +331,7 @@ const addPayment = async (req, res) => {
     const left = parseFloat(txn.to_be_paid) - parseFloat(txn.paid);
     if (left <= 0) return res.status(400).json({ message: 'Already fully paid' });
 
-    const { amount, payment_date, remarks } = req.body;
+    const { amount, payment_date, remarks, payment_method } = req.body;
     const amt = Math.min(parseFloat(amount), left);
     if (!amt || amt <= 0) return res.status(400).json({ message: 'Invalid amount' });
 
@@ -331,6 +339,7 @@ const addPayment = async (req, res) => {
       transaction_id: txn.id,
       amount_paid:    amt,
       payment_date:   payment_date || new Date().toISOString().split('T')[0],
+      payment_method: normMethod(payment_method),
       remarks:        remarks || null,
     }, { transaction: t });
 
