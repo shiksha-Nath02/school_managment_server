@@ -66,13 +66,23 @@ const deleteExpense = async (req, res) => {
   }
 };
 
+// Normalise the date to a plain YYYY-MM-DD. The column is DATEONLY but the
+// driver hands back a Date object here, which serialises to a full ISO
+// timestamp — that broke client-side date-range filtering (the longer
+// timestamp string sorted past the "to" date, dropping same-day rows).
+const ymd = (d) => {
+  if (!d) return null;
+  if (typeof d === 'string') return d.slice(0, 10);
+  return new Date(d).toISOString().slice(0, 10);
+};
+
 function fmt(e) {
   return {
     id:          e.id,
     category:    e.category,
     description: e.description,
     amount:      parseFloat(e.amount),
-    date:        e.date,
+    date:        ymd(e.date),
     teacherId:   e.teacher_id || null,
     staffId:     e.staff_id || null,
     gross:       e.gross_amount != null ? parseFloat(e.gross_amount) : null,

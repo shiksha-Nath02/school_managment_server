@@ -18,6 +18,23 @@ const currentBillingPeriod = () => {
   return { month: nowIST.getUTCMonth() + 1, year: nowIST.getUTCFullYear() };
 };
 
+// Run fn over items with at most `limit` in flight at once. Results are returned
+// in input order. Used to fan out the independent per-student work on the dues /
+// class-wise report endpoints instead of awaiting each student sequentially.
+const mapWithConcurrency = async (items, limit, fn) => {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (true) {
+      const idx = next++;
+      if (idx >= items.length) break;
+      results[idx] = await fn(items[idx], idx);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+};
+
 // ──────────────────────────────────────────────────
 // RECORD A SINGLE PAYMENT
 // POST /api/admin/fees/pay
@@ -560,10 +577,11 @@ const getStudentsWithDues = async (req, res) => {
       ]
     });
 
-    const studentsWithDues = [];
     const { month: curMonth, year: curYear } = currentBillingPeriod();
 
-    for (const student of students) {
+    // Each student's work is independent (per-student row lock), so fan out with
+    // bounded concurrency instead of awaiting one student at a time.
+    const perStudent = await mapWithConcurrency(students, 10, async (student) => {
       // Materialize any unbilled months (incl. current) so pending shows up
       // even when no payment has been recorded yet. Idempotent per student.
       try {
@@ -578,26 +596,27 @@ const getStudentsWithDues = async (req, res) => {
       });
 
       const pending = lastRow ? parseFloat(lastRow.pending_after) : 0;
-      if (pending > 0) {
-        const fineData = await calculateFine(student.id);
-        const fine = fineData.fine || 0;
-        studentsWithDues.push({
-          id: student.id,
-          name: student.user?.name,
-          phone: student.user?.phone,
-          class: student.class ? `${student.class.class_name}-${student.class.section}` : null,
-          class_id: student.class_id,
-          roll_number: student.roll_number,
-          category: student.category || null,
-          pending,
-          fine,
-          total_due: pending + fine,
-          last_billing_month: lastRow?.billing_month,
-          last_billing_year: lastRow?.billing_year
-        });
-      }
-    }
+      if (pending <= 0) return null;
 
+      const fineData = await calculateFine(student.id);
+      const fine = fineData.fine || 0;
+      return {
+        id: student.id,
+        name: student.user?.name,
+        phone: student.user?.phone,
+        class: student.class ? `${student.class.class_name}-${student.class.section}` : null,
+        class_id: student.class_id,
+        roll_number: student.roll_number,
+        category: student.category || null,
+        pending,
+        fine,
+        total_due: pending + fine,
+        last_billing_month: lastRow?.billing_month,
+        last_billing_year: lastRow?.billing_year
+      };
+    });
+
+    const studentsWithDues = perStudent.filter(Boolean);
     studentsWithDues.sort((a, b) => sort === 'asc' ? a.pending - b.pending : b.pending - a.pending);
 
     res.json({
@@ -635,58 +654,69 @@ const getClasswiseReport = async (req, res) => {
       }]
     });
 
-    const report = [];
     const { month: curMonth, year: curYear } = currentBillingPeriod();
 
+    // Flatten all students (with their class) and fan out the per-student work
+    // with bounded concurrency, then aggregate the results back per class.
+    const flat = [];
     for (const cls of classes) {
-      let totalCollected = 0;
-      let totalPending = 0;
-      const studentCount = cls.students?.length || 0;
+      for (const student of (cls.students || [])) flat.push({ classId: cls.id, studentId: student.id });
+    }
 
-      for (const student of (cls.students || [])) {
-        // Materialize unbilled months (incl. current) so pending is accurate.
-        try {
-          await ensureBilledUpTo(student.id, curMonth, curYear);
-        } catch (genErr) {
-          console.error(`Fee auto-bill failed for student ${student.id}:`, genErr.message);
-        }
-
-        // Build payment where clause
-        const paymentWhere = {
-          student_id: student.id,
-          is_system_generated: false,
-          amount_paid: { [Op.gt]: 0 }
-        };
-
-        if (sessionFilter) {
-          const startVal = sessionFilter.start_year * 100 + sessionFilter.start_month;
-          const endVal = sessionFilter.end_year * 100 + sessionFilter.end_month;
-          paymentWhere[Op.and] = [
-            sequelize.literal(`(billing_year * 100 + billing_month) >= ${startVal}`),
-            sequelize.literal(`(billing_year * 100 + billing_month) <= ${endVal}`)
-          ];
-        }
-
-        const paid = await FeePayment.sum('amount_paid', { where: paymentWhere });
-        totalCollected += parseFloat(paid || 0);
-
-        const lastRow = await FeePayment.findOne({
-          where: { student_id: student.id },
-          order: [['billing_year', 'DESC'], ['billing_month', 'DESC'], ['id', 'DESC']]
-        });
-        const pending = lastRow ? parseFloat(lastRow.pending_after) : 0;
-        if (pending > 0) totalPending += pending;
+    const perStudent = await mapWithConcurrency(flat, 10, async ({ studentId }) => {
+      // Materialize unbilled months (incl. current) so pending is accurate.
+      try {
+        await ensureBilledUpTo(studentId, curMonth, curYear);
+      } catch (genErr) {
+        console.error(`Fee auto-bill failed for student ${studentId}:`, genErr.message);
       }
 
-      report.push({
+      // Build payment where clause
+      const paymentWhere = {
+        student_id: studentId,
+        is_system_generated: false,
+        amount_paid: { [Op.gt]: 0 }
+      };
+
+      if (sessionFilter) {
+        const startVal = sessionFilter.start_year * 100 + sessionFilter.start_month;
+        const endVal = sessionFilter.end_year * 100 + sessionFilter.end_month;
+        paymentWhere[Op.and] = [
+          sequelize.literal(`(billing_year * 100 + billing_month) >= ${startVal}`),
+          sequelize.literal(`(billing_year * 100 + billing_month) <= ${endVal}`)
+        ];
+      }
+
+      const paid = await FeePayment.sum('amount_paid', { where: paymentWhere });
+
+      const lastRow = await FeePayment.findOne({
+        where: { student_id: studentId },
+        order: [['billing_year', 'DESC'], ['billing_month', 'DESC'], ['id', 'DESC']]
+      });
+      const pending = lastRow ? parseFloat(lastRow.pending_after) : 0;
+
+      return { collected: parseFloat(paid || 0), pending: pending > 0 ? pending : 0 };
+    });
+
+    const agg = new Map(); // class_id -> { collected, pending }
+    flat.forEach((f, i) => {
+      const a = agg.get(f.classId) || { collected: 0, pending: 0 };
+      a.collected += perStudent[i].collected;
+      a.pending   += perStudent[i].pending;
+      agg.set(f.classId, a);
+    });
+
+    const report = classes.map((cls) => {
+      const a = agg.get(cls.id) || { collected: 0, pending: 0 };
+      return {
         class_id: cls.id,
         class_name: cls.class_name,
         section: cls.section,
-        student_count: studentCount,
-        total_collected: totalCollected,
-        total_pending: totalPending
-      });
-    }
+        student_count: cls.students?.length || 0,
+        total_collected: a.collected,
+        total_pending: a.pending
+      };
+    });
 
     res.json({ success: true, report });
   } catch (error) {
