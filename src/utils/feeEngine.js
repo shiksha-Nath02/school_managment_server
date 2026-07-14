@@ -5,9 +5,10 @@ const sequelize = require('../config/database');
 /**
  * Get the session that a given month/year belongs to.
  */
-const getSessionForMonth = async (month, year) => {
+const getSessionForMonth = async (month, year, transaction = null) => {
   const sessions = await Session.findAll({
-    order: [['start_year', 'ASC'], ['start_month', 'ASC']]
+    order: [['start_year', 'ASC'], ['start_month', 'ASC']],
+    ...(transaction ? { transaction } : {})
   });
 
   for (const session of sessions) {
@@ -24,10 +25,16 @@ const getSessionForMonth = async (month, year) => {
 
 /**
  * Get a student's monthly fee config for a given session.
+ *
+ * Accepts an optional transaction so callers that have just written a fee in the
+ * same txn (e.g. updateSessionFees → recalculateChain) read their own uncommitted
+ * update. Without it, MySQL's REPEATABLE-READ isolation returns the stale/absent
+ * fee and the recalc computes pending against a 0 fee.
  */
-const getStudentFeeForSession = async (studentId, sessionId) => {
+const getStudentFeeForSession = async (studentId, sessionId, transaction = null) => {
   return await StudentFee.findOne({
-    where: { student_id: studentId, session_id: sessionId }
+    where: { student_id: studentId, session_id: sessionId },
+    ...(transaction ? { transaction } : {})
   });
 };
 
@@ -242,9 +249,9 @@ const recalculateChain = async (studentId, fromMonth, fromYear, transaction) => 
     if (prevMonth !== null) {
       let cur = nextMonth(prevMonth, prevYear);
       while (cur.year < row.billing_year || (cur.year === row.billing_year && cur.month <= row.billing_month)) {
-        const session = await getSessionForMonth(cur.month, cur.year);
+        const session = await getSessionForMonth(cur.month, cur.year, transaction);
         if (session && !isExcludedMonth(cur.month, session)) {
-          const feeConfig = await getStudentFeeForSession(studentId, session.id);
+          const feeConfig = await getStudentFeeForSession(studentId, session.id, transaction);
           const monthlyFee = feeConfig ? parseFloat(feeConfig.monthly_fee) : 0;
           const discount = feeConfig ? parseFloat(feeConfig.discount) : 0;
           runningPending += monthlyFee - discount;
