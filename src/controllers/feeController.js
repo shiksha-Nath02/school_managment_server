@@ -509,7 +509,8 @@ const getStudentFeeHistory = async (req, res) => {
         reversal_for: row.reversal_for,
         adjustment: parseFloat(row.adjustment || 0),
         advance: parseFloat(row.advance || 0),
-        remarks: row.remarks
+        remarks: row.remarks,
+        created_at: row.created_at   // when the entry was fed into the system
       };
     });
 
@@ -538,6 +539,23 @@ const getStudentFeeHistory = async (req, res) => {
       }
     }
 
+    // Admission-fee records across ALL sessions, surfaced as log lines.
+    const admissionRows = await AdmissionFee.findAll({
+      where: { student_id: studentId },
+      include: [{ model: Session, as: 'session', attributes: ['name'] }],
+      order: [['created_at', 'ASC']],
+    });
+    const admissionPayments = admissionRows.map(a => ({
+      id: a.id,
+      session_name: a.session?.name || null,
+      annual_charge: parseFloat(a.annual_charge),
+      discount: parseFloat(a.discount),
+      paid_amount: parseFloat(a.paid_amount),
+      assumed_paid: a.assumed_paid,
+      created_at: a.created_at,   // when fed into the system
+      updated_at: a.updated_at,   // last payment/change
+    }));
+
     res.json({
       success: true,
       student: {
@@ -564,7 +582,8 @@ const getStudentFeeHistory = async (req, res) => {
       totalPaid,
       totalAdjustment,
       totalAdvance,
-      admissionFee
+      admissionFee,
+      admissionPayments
     });
   } catch (error) {
     console.error('Error fetching student fee history:', error);
