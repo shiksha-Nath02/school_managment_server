@@ -150,10 +150,16 @@ const getStudents = async (req, res) => {
     const { class_id, search } = req.query;
     const where = {};
     if (class_id) where.class_id = parseInt(class_id, 10);
+    if (search) {
+      where[Op.or] = [
+        { admission_number: { [Op.like]: `%${search}%` } },
+        { '$user.name$':     { [Op.like]: `%${search}%` } },
+      ];
+    }
     const students = await Student.findAll({
       where,
       include: [
-        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'], ...(search ? { where: { name: { [Op.like]: `%${search}%` } } } : {}) },
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] },
         { model: Class, as: 'class', attributes: ['id', 'class_name', 'section'] },
       ],
       order: [['roll_number', 'ASC']],
