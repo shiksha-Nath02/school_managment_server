@@ -968,6 +968,115 @@ const getProfitReport = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────────
+// TRANSACTIONS — consolidated, date-filtered, server-paginated
+// GET /api/admin/transactions?from=&to=&type=&direction=&limit=&offset=
+// Merges payment_log + uniform + book payments + expenses for the date range,
+// sorts newest-first, and returns one page plus the total count / range totals.
+// This is the paginated sibling of getProfitReport (which returns everything).
+// ──────────────────────────────────────────────────
+const getTransactions = async (req, res) => {
+  try {
+    const { from, to, type, direction, limit = 50, offset = 0 } = req.query;
+    const lim = Math.min(Math.max(1, parseInt(limit) || 50), 500);
+    const off = Math.max(0, parseInt(offset) || 0);
+
+    const dateCond = (col) => {
+      if (from && to) return { [col]: { [Op.between]: [from, to] } };
+      if (from)       return { [col]: { [Op.gte]: from } };
+      if (to)         return { [col]: { [Op.lte]: to } };
+      return {};
+    };
+
+    const [paymentLogs, uniformPayments, bookPayments, expenses] = await Promise.all([
+      PaymentLog.findAll({ where: dateCond('date') }),
+      UniformPayment.findAll({
+        where: dateCond('payment_date'),
+        include: [{ model: UniformTransaction, as: 'transaction', attributes: ['admission_number', 'student_name'] }],
+      }),
+      BookPayment.findAll({
+        where: dateCond('payment_date'),
+        include: [{ model: BookTransaction, as: 'transaction', attributes: ['admission_number', 'student_name'] }],
+      }),
+      Expense.findAll({ where: dateCond('date') }),
+    ]);
+
+    const transactions = [];
+
+    for (const log of paymentLogs) {
+      transactions.push({
+        id: `log_${log.id}`,
+        type: log.type,
+        direction: log.direction,
+        amount: parseFloat(log.amount),
+        date: log.date,
+        description: log.description || '',
+      });
+    }
+    for (const up of uniformPayments) {
+      const txn = up.transaction;
+      transactions.push({
+        id: `uniform_${up.id}`,
+        type: 'uniform',
+        direction: 'income',
+        amount: parseFloat(up.amount_paid),
+        date: up.payment_date,
+        description: `Uniform purchase${txn?.student_name ? ` — ${txn.student_name}` : ''}${up.remarks ? ` (${up.remarks})` : ''}`,
+      });
+    }
+    for (const bp of bookPayments) {
+      const txn = bp.transaction;
+      transactions.push({
+        id: `book_${bp.id}`,
+        type: 'books',
+        direction: 'income',
+        amount: parseFloat(bp.amount_paid),
+        date: bp.payment_date,
+        description: `Book purchase${txn?.student_name ? ` — ${txn.student_name}` : ''}${bp.remarks ? ` (${bp.remarks})` : ''}`,
+      });
+    }
+    const expTypeLabel = (c) => (c === 'stationary' ? 'stationery' : c || 'other');
+    for (const exp of expenses) {
+      transactions.push({
+        id: `exp_${exp.id}`,
+        type: expTypeLabel(exp.category),
+        direction: 'expenditure',
+        amount: parseFloat(exp.amount),
+        date: exp.date,
+        description: exp.description || `${expTypeLabel(exp.category)} expense`,
+      });
+    }
+
+    // Optional type / direction filters (applied before paging so `total` is accurate).
+    let filtered = transactions;
+    if (direction) filtered = filtered.filter(t => t.direction === direction);
+    if (type)      filtered = filtered.filter(t => t.type === type);
+
+    // Newest first; stable tie-break on the id string for a deterministic page.
+    filtered.sort((a, b) => {
+      const d = String(b.date || '').localeCompare(String(a.date || ''));
+      return d !== 0 ? d : String(b.id).localeCompare(String(a.id));
+    });
+
+    const total = filtered.length;
+    const totalIncome      = filtered.filter(t => t.direction === 'income').reduce((s, t) => s + t.amount, 0);
+    const totalExpenditure = filtered.filter(t => t.direction === 'expenditure').reduce((s, t) => s + t.amount, 0);
+
+    res.json({
+      success: true,
+      total,
+      limit: lim,
+      offset: off,
+      totalIncome,
+      totalExpenditure,
+      transactions: filtered.slice(off, off + lim),
+    });
+  } catch (error) {
+    console.error('Error fetching transactions:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch transactions' });
+  }
+};
+
+// ──────────────────────────────────────────────────
 // ADD MANUAL PAYMENT LOG ENTRY (expense or misc income)
 // POST /api/admin/payment-log
 // Body: { type, direction, amount, date, description }
@@ -1086,6 +1195,7 @@ module.exports = {
   recordReversal,
   getProfitReport,
   getPaymentLog,
+  getTransactions,
   addPaymentLogEntry,
   getMyFeeHistory
 };
