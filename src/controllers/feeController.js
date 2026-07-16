@@ -767,7 +767,9 @@ const recordReversal = async (req, res) => {
   const txn = await sequelize.transaction();
   try {
     const { id } = req.params;
-    const { remarks } = req.body;
+    // Frontend sends `reason`; keep `remarks` as a fallback for older callers.
+    const { reason, remarks } = req.body;
+    const note = reason || remarks;
 
     const originalPayment = await FeePayment.findByPk(id, { transaction: txn, lock: txn.LOCK.UPDATE });
     if (!originalPayment) {
@@ -805,6 +807,13 @@ const recordReversal = async (req, res) => {
       billing_year: originalPayment.billing_year,
       amount_paid: -parseFloat(originalPayment.amount_paid),
       fine_amount: -parseFloat(originalPayment.fine_amount),
+      // Negate the balance adjustments too. Without these, reversing an
+      // advance-credit or previous-dues entry leaves the balance effect intact
+      // (the reversal is a no-op). recalculateChain re-applies them flipped:
+      // it does `+= adjustment` and `-= advance`, so the mirrored signs cancel
+      // the original row's effect.
+      adjustment: -parseFloat(originalPayment.adjustment || 0),
+      advance: -parseFloat(originalPayment.advance || 0),
       pending_after: 0, // recalculateChain will fix this
       payment_date: today,
       payment_method: originalPayment.payment_method,
@@ -812,7 +821,7 @@ const recordReversal = async (req, res) => {
       is_system_generated: false,
       is_reversal: true,
       reversal_for: originalPayment.id,
-      remarks: remarks || `Reversal of ${originalPayment.receipt_number}`,
+      remarks: note || `Reversal of ${originalPayment.receipt_number}`,
       received_by: req.user?.id || null
     }, { transaction: txn });
 
@@ -836,7 +845,8 @@ const recordReversal = async (req, res) => {
     }, { transaction: txn });
 
     await txn.commit();
-    res.json({ success: true, message: 'Payment reversed successfully', receipt_number: receiptNum });
+    // `reversal_receipt` is the key the dashboard reads; keep `receipt_number` for compatibility.
+    res.json({ success: true, message: 'Payment reversed successfully', receipt_number: receiptNum, reversal_receipt: receiptNum });
   } catch (error) {
     await txn.rollback();
     console.error('Error reversing payment:', error);
