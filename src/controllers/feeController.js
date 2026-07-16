@@ -560,6 +560,7 @@ const getStudentFeeHistory = async (req, res) => {
       success: true,
       student: {
         id: student.id,
+        admission_number: student.admission_number,
         name: student.user?.name,
         email: student.user?.email,
         phone: student.user?.phone,
@@ -637,6 +638,9 @@ const getStudentsWithDues = async (req, res) => {
         id: student.id,
         name: student.user?.name,
         phone: student.user?.phone,
+        // Father's phone drives the dues-list Phone column; fall back to the
+        // login phone (users.phone) when the father's number isn't on file.
+        father_phone: student.father_phone || student.user?.phone || null,
         class: student.class ? `${student.class.class_name}-${student.class.section}` : null,
         class_id: student.class_id,
         roll_number: student.roll_number,
