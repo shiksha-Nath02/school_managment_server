@@ -28,9 +28,11 @@ const getExpenses = async (req, res) => {
 
 const addExpense = async (req, res) => {
   try {
-    const { category, description, amount, date, teacher_id, staff_id, gross_amount, deduction } = req.body;
+    const { category, description, amount, date, teacher_id, staff_id, gross_amount, deduction, payment_method } = req.body;
     if (!category || !amount || !date) return res.status(400).json({ message: 'category (reason), amount, and date are required' });
     if (!REASONS.includes(category)) return res.status(400).json({ message: `Invalid reason. Allowed: ${REASONS.join(', ')}` });
+
+    const method = payment_method === 'online' ? 'online' : 'cash'; // default cash
 
     const isSalary = category === 'salary';
     if (isSalary && !teacher_id && !staff_id) {
@@ -41,6 +43,7 @@ const addExpense = async (req, res) => {
       category,
       description: description || null,
       amount:      parseFloat(amount), // final/net amount paid
+      payment_method: method,
       date,
       // Salary-only fields; null for every other reason.
       teacher_id:   isSalary ? (teacher_id || null) : null,
@@ -82,6 +85,7 @@ function fmt(e) {
     category:    e.category,
     description: e.description,
     amount:      parseFloat(e.amount),
+    payment_method: e.payment_method || 'cash',
     date:        ymd(e.date),
     teacherId:   e.teacher_id || null,
     staffId:     e.staff_id || null,
