@@ -23,6 +23,7 @@ const BookItem = require('./BookItem');
 const BookTransaction = require('./BookTransaction');
 const BookPayment = require('./BookPayment');
 const Expense = require('./Expense');
+const Handover = require('./Handover');
 const StudentDocument = require('./StudentDocument');
 const GalleryImage = require('./GalleryImage');
 const Circular = require('./Circular');
@@ -152,6 +153,7 @@ module.exports = {
   BookTransaction,
   BookPayment,
   Expense,
+  Handover,
   StudentDocument,
   GalleryImage,
   Circular,
