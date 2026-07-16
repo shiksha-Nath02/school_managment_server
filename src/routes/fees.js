@@ -23,6 +23,9 @@ router.post('/fees/reverse/:id', feeController.recordReversal);
 router.get('/payment-log', feeController.getPaymentLog);
 router.post('/payment-log', feeController.addPaymentLogEntry);
 
+// ── Transactions (consolidated, paginated) ────────
+router.get('/transactions', feeController.getTransactions);
+
 // ── Profit ────────────────────────────────────────
 router.get('/profit', feeController.getProfitReport);
 
