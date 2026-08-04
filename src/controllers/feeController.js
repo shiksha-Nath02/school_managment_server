@@ -639,8 +639,8 @@ const getStudentsWithDues = async (req, res) => {
         name: student.user?.name,
         phone: student.user?.phone,
         // Father's phone drives the dues-list Phone column; fall back to the
-        // login phone (users.phone) when the father's number isn't on file.
-        father_phone: student.father_phone || student.user?.phone || null,
+        // mother's phone, then the login phone (users.phone), when it's not on file.
+        father_phone: student.father_phone || student.mother_phone || student.user?.phone || null,
         class: student.class ? `${student.class.class_name}-${student.class.section}` : null,
         class_id: student.class_id,
         roll_number: student.roll_number,

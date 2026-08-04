@@ -10,6 +10,7 @@ const {
   updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary,
   getSelfAttendanceSetting, toggleSelfAttendance,
   resetUserPassword,
+  getClassReportCards, getClassAttendanceSummary,
 } = require('../controllers/adminController');
 const { getDashboard } = require('../controllers/dashboardController');
 const { authorize } = require('../middlewares/auth');
@@ -23,6 +24,10 @@ router.put('/users/:userId/reset-password', authorize('superadmin'), resetUserPa
 // Self-attendance settings
 router.get('/settings/self-attendance', getSelfAttendanceSetting);
 router.post('/settings/self-attendance', toggleSelfAttendance);
+
+// Academic reports & attendance (class-wide, for the admin Reports/Attendance tabs)
+router.get('/report-cards/:classId', getClassReportCards);
+router.get('/class-attendance', getClassAttendanceSummary);
 
 // Students
 router.get('/student-lookup', lookupStudent); // by admission number, for sell forms

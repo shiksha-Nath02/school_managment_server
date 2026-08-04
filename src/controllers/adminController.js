@@ -590,16 +590,30 @@ const getTeacherAttendanceSummary = async (req, res) => {
 
     const summaryMap = {};
     for (const t of teachers) {
-      summaryMap[t.id] = { teacherId: t.id, teacherName: t.user?.name || 'Unknown', subject: t.subject || '', present: 0, late: 0, half_day: 0, absent: 0, on_leave: 0, official_duty: 0, total: 0 };
+      // `days` holds the per-date detail for the monthly register grid; the flat
+      // counts (present/late/…) are kept for the summary view.
+      summaryMap[t.id] = { teacherId: t.id, teacherName: t.user?.name || 'Unknown', subject: t.subject || '', present: 0, late: 0, half_day: 0, absent: 0, on_leave: 0, official_duty: 0, total: 0, days: {} };
     }
     for (const r of records) {
-      if (summaryMap[r.teacher_id]) {
-        summaryMap[r.teacher_id][r.status] = (summaryMap[r.teacher_id][r.status] || 0) + 1;
-        summaryMap[r.teacher_id].total++;
+      const row = summaryMap[r.teacher_id];
+      if (!row) continue;
+      row[r.status] = (row[r.status] || 0) + 1;
+      row.total++;
+
+      // DATEONLY comes back as 'YYYY-MM-DD'; take the day-of-month as the grid key.
+      const dateStr = typeof r.date === 'string' ? r.date : new Date(r.date).toISOString().slice(0, 10);
+      const day = parseInt(dateStr.slice(8, 10), 10);
+      if (day) {
+        row.days[day] = {
+          status: r.status,
+          checkInTime: r.check_in_time,
+          checkOutTime: r.check_out_time,
+          leaveType: r.leave_type,
+        };
       }
     }
 
-    res.json({ summary: Object.values(summaryMap), month: monthNum, year: yearNum });
+    res.json({ summary: Object.values(summaryMap), month: monthNum, year: yearNum, daysInMonth: lastDay });
   } catch (error) {
     console.error('Summary error:', error);
     res.status(500).json({ message: 'Failed to fetch summary' });
@@ -1012,8 +1026,170 @@ const resetUserPassword = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────────
+// CLASS REPORT CARDS (consolidated data for printable cards)
+// GET /api/admin/report-cards/:classId?studentId=
+// Returns class + active session + each student's profile, ALL their marks,
+// and attendance totals for the session — enough for the frontend to render
+// one printable report card per student.
+// ──────────────────────────────────────────────────
+const getClassReportCards = async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const { studentId } = req.query;
+
+    const klass = await Class.findByPk(classId);
+    if (!klass) return res.status(404).json({ message: 'Class not found' });
+
+    // Most-recent session drives the header + the attendance date range.
+    const session = await Session.findOne({ order: [['start_year', 'DESC'], ['id', 'DESC']] });
+
+    const studentWhere = { class_id: classId };
+    if (studentId) studentWhere.id = parseInt(studentId, 10);
+
+    const students = await Student.findAll({
+      where: studentWhere,
+      include: [{ model: User, as: 'user', attributes: ['name'] }],
+      order: [['roll_number', 'ASC']],
+    });
+    const studentIds = students.map((s) => s.id);
+
+    // All marks for these students, in one query.
+    const marks = studentIds.length
+      ? await Mark.findAll({ where: { student_id: { [Op.in]: studentIds } }, raw: true })
+      : [];
+
+    // Attendance range: the session's months (Indian Apr–Mar via session config), else the calendar year.
+    let attStart, attEnd;
+    if (session) {
+      const sm = String(session.start_month).padStart(2, '0');
+      const em = String(session.end_month).padStart(2, '0');
+      const lastDay = new Date(session.end_year, session.end_month, 0).getDate();
+      attStart = `${session.start_year}-${sm}-01`;
+      attEnd = `${session.end_year}-${em}-${String(lastDay).padStart(2, '0')}`;
+    } else {
+      const y = new Date().getFullYear();
+      attStart = `${y}-01-01`;
+      attEnd = `${y}-12-31`;
+    }
+
+    const attendance = studentIds.length
+      ? await Attendance.findAll({
+          where: { student_id: { [Op.in]: studentIds }, date: { [Op.between]: [attStart, attEnd] } },
+          attributes: ['student_id', 'status'],
+          raw: true,
+        })
+      : [];
+
+    const attMap = {};
+    for (const a of attendance) {
+      if (!attMap[a.student_id]) attMap[a.student_id] = { present: 0, total: 0 };
+      attMap[a.student_id].total++;
+      if (a.status === 'present') attMap[a.student_id].present++;
+    }
+
+    const result = students.map((s) => {
+      const sMarks = marks
+        .filter((m) => m.student_id === s.id)
+        .map((m) => ({
+          subject: m.subject,
+          examType: m.exam_type,
+          marksObtained: m.is_absent ? null : (m.marks_obtained !== null ? parseFloat(m.marks_obtained) : null),
+          maxMarks: m.max_marks,
+          isAbsent: m.is_absent,
+          remark: m.remark,
+        }));
+      const att = attMap[s.id] || { present: 0, total: 0 };
+      return {
+        id: s.id,
+        name: s.user?.name || `Student ${s.id}`,
+        admissionNumber: s.admission_number,
+        rollNumber: s.roll_number,
+        dateOfBirth: s.date_of_birth,
+        fatherName: s.father_name,
+        motherName: s.mother_name,
+        category: s.category,
+        marks: sMarks,
+        attendance: {
+          present: att.present,
+          total: att.total,
+          percentage: att.total ? Math.round((att.present / att.total) * 100) : null,
+        },
+      };
+    });
+
+    res.json({
+      class: { id: klass.id, className: klass.class_name, section: klass.section },
+      session: session
+        ? { name: session.name, startYear: session.start_year, endYear: session.end_year }
+        : null,
+      students: result,
+    });
+  } catch (error) {
+    console.error('Get class report cards error:', error);
+    res.status(500).json({ message: 'Failed to fetch report cards' });
+  }
+};
+
+// ──────────────────────────────────────────────────
+// CLASS ATTENDANCE SUMMARY (per-student present/total/% over a date range)
+// GET /api/admin/class-attendance?classId=&from=&to=
+// ──────────────────────────────────────────────────
+const getClassAttendanceSummary = async (req, res) => {
+  try {
+    const { classId, from, to } = req.query;
+    if (!classId) return res.status(400).json({ message: 'classId is required' });
+
+    const today = new Date().toISOString().split('T')[0];
+    const startDate = from || `${new Date().getFullYear()}-01-01`;
+    const endDate = to || today;
+
+    const students = await Student.findAll({
+      where: { class_id: classId },
+      include: [{ model: User, as: 'user', attributes: ['name'] }],
+      order: [['roll_number', 'ASC']],
+    });
+    const studentIds = students.map((s) => s.id);
+
+    const attendance = studentIds.length
+      ? await Attendance.findAll({
+          where: { student_id: { [Op.in]: studentIds }, date: { [Op.between]: [startDate, endDate] } },
+          attributes: ['student_id', 'status'],
+          raw: true,
+        })
+      : [];
+
+    const attMap = {};
+    for (const a of attendance) {
+      if (!attMap[a.student_id]) attMap[a.student_id] = { present: 0, total: 0 };
+      attMap[a.student_id].total++;
+      if (a.status === 'present') attMap[a.student_id].present++;
+    }
+
+    const rows = students.map((s) => {
+      const att = attMap[s.id] || { present: 0, total: 0 };
+      return {
+        id: s.id,
+        name: s.user?.name || `Student ${s.id}`,
+        admissionNumber: s.admission_number,
+        rollNumber: s.roll_number,
+        present: att.present,
+        absent: att.total - att.present,
+        total: att.total,
+        percentage: att.total ? Math.round((att.present / att.total) * 100) : null,
+      };
+    });
+
+    res.json({ from: startDate, to: endDate, students: rows });
+  } catch (error) {
+    console.error('Get class attendance summary error:', error);
+    res.status(500).json({ message: 'Failed to fetch class attendance' });
+  }
+};
+
 module.exports = {
   resetUserPassword,
+  getClassReportCards, getClassAttendanceSummary,
   addStudent, getStudents, getStudentById, updateStudent, removeStudent, getClasses,
   getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory, lookupStudent,
   getTeacherAttendanceById, getTeacherClassesById,
