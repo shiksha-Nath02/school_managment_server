@@ -7,7 +7,7 @@ const {
   getAllTeachers, addTeacher, updateTeacher, removeTeacher, setTeacherPermissions,
   getTeacherAttendance, submitTeacherAttendance,
   checkInTeacher, checkOutTeacher, markTeacherStatus,
-  updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary,
+  updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary, getTeacherAttendancePhotos,
   getSelfAttendanceSetting, toggleSelfAttendance,
   resetUserPassword,
   getClassReportCards, getClassAttendanceSummary,
@@ -58,6 +58,7 @@ router.get('/teachers/:id/classes', getTeacherClassesById);
 
 // Teacher attendance — specific paths before :id
 router.get('/teacher-attendance/summary', getTeacherAttendanceSummary);
+router.get('/teacher-attendance/photos', getTeacherAttendancePhotos);
 router.get('/teacher-attendance', getTeacherAttendance);
 router.post('/teacher-attendance', submitTeacherAttendance);
 router.post('/teacher-attendance/check-in', checkInTeacher);
