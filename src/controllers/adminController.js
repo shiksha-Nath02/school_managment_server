@@ -620,6 +620,51 @@ const getTeacherAttendanceSummary = async (req, res) => {
   }
 };
 
+// All teachers' check-in / check-out photos for a whole month.
+// Query: ?month=8&year=2026 (defaults to current month). Only rows that
+// actually carry a photo are returned. Optional ?teacherId= to scope one teacher.
+const getTeacherAttendancePhotos = async (req, res) => {
+  try {
+    const now = new Date();
+    const monthNum = parseInt(req.query.month) || (now.getMonth() + 1);
+    const yearNum = parseInt(req.query.year) || now.getFullYear();
+    if (monthNum < 1 || monthNum > 12) return res.status(400).json({ message: 'Invalid month' });
+
+    const mm = String(monthNum).padStart(2, '0');
+    const lastDay = new Date(yearNum, monthNum, 0).getDate();
+    const startDate = `${yearNum}-${mm}-01`;
+    const endDate = `${yearNum}-${mm}-${String(lastDay).padStart(2, '0')}`;
+
+    const where = {
+      date: { [Op.between]: [startDate, endDate] },
+      [Op.or]: [{ check_in_image: { [Op.ne]: null } }, { check_out_image: { [Op.ne]: null } }],
+    };
+    if (req.query.teacherId) where.teacher_id = parseInt(req.query.teacherId);
+
+    const records = await TeacherAttendance.findAll({
+      where,
+      include: [{ model: Teacher, as: 'teacher', include: [{ model: User, as: 'user', attributes: ['name'] }] }],
+      order: [['date', 'ASC'], ['teacher_id', 'ASC']],
+    });
+
+    const photos = [];
+    for (const r of records) {
+      const teacherName = r.teacher?.user?.name || 'Unknown';
+      if (r.check_in_image) {
+        photos.push({ teacherId: r.teacher_id, teacherName, date: r.date, type: 'check_in', time: r.check_in_time, imageUrl: publicUrl(r.check_in_image) });
+      }
+      if (r.check_out_image) {
+        photos.push({ teacherId: r.teacher_id, teacherName, date: r.date, type: 'check_out', time: r.check_out_time, imageUrl: publicUrl(r.check_out_image) });
+      }
+    }
+
+    res.json({ month: monthNum, year: yearNum, count: photos.length, photos });
+  } catch (error) {
+    console.error('Teacher attendance photos error:', error);
+    res.status(500).json({ message: 'Failed to fetch teacher attendance photos' });
+  }
+};
+
 // ─────────── STUDENT PROFILE — DETAIL ENDPOINTS ───────────
 
 const getStudentAttendance = async (req, res) => {
@@ -1197,6 +1242,6 @@ module.exports = {
   getAllTeachers, addTeacher, updateTeacher, removeTeacher, setTeacherPermissions,
   getTeacherAttendance, submitTeacherAttendance,
   checkInTeacher, checkOutTeacher, markTeacherStatus,
-  updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary,
+  updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary, getTeacherAttendancePhotos,
   getSelfAttendanceSetting, toggleSelfAttendance,
 };
