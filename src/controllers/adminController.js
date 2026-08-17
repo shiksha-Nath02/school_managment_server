@@ -623,6 +623,8 @@ const getTeacherAttendanceSummary = async (req, res) => {
 // All teachers' check-in / check-out photos for a whole month.
 // Query: ?month=8&year=2026 (defaults to current month). Only rows that
 // actually carry a photo are returned. Optional ?teacherId= to scope one teacher.
+// Optional ?groupBy=date returns the photos bucketed per date (newest first)
+// instead of a flat list — same photo objects, grouped for a date-wise view.
 const getTeacherAttendancePhotos = async (req, res) => {
   try {
     const now = new Date();
@@ -656,6 +658,16 @@ const getTeacherAttendancePhotos = async (req, res) => {
       if (r.check_out_image) {
         photos.push({ teacherId: r.teacher_id, teacherName, date: r.date, type: 'check_out', time: r.check_out_time, imageUrl: publicUrl(r.check_out_image) });
       }
+    }
+
+    if (req.query.groupBy === 'date') {
+      const map = {};
+      for (const p of photos) {
+        (map[p.date] = map[p.date] || []).push(p);
+      }
+      // Newest date first for a date-wise gallery view.
+      const dates = Object.keys(map).sort().reverse().map((date) => ({ date, photos: map[date] }));
+      return res.json({ month: monthNum, year: yearNum, count: photos.length, dates });
     }
 
     res.json({ month: monthNum, year: yearNum, count: photos.length, photos });
