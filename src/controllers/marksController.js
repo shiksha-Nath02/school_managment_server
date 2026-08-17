@@ -127,54 +127,105 @@ const saveMarks = async (req, res) => {
 
     let created = 0;
     let updated = 0;
+    let deleted = 0;
 
     for (const entry of marks_data) {
       const { student_id, subject, max_marks, marks_obtained, is_absent, remark } = entry;
 
-      if (!student_id || !subject || !max_marks) continue;
+      if (!student_id || !subject) continue;
 
       const existing = await Mark.findOne({
         where: { student_id, subject, exam_type },
         transaction: txn
       });
 
+      // A student has a real mark only if marked absent or a number was entered.
+      // A blank field is NOT zero — it means "no mark". Never store 0 for a blank.
+      const hasNumber =
+        marks_obtained !== null && marks_obtained !== undefined && marks_obtained !== '';
+      const meaningful = !!is_absent || hasNumber;
+
+      if (!meaningful) {
+        // Cleared / never entered → remove any existing row instead of saving a 0.
+        if (existing) {
+          await existing.destroy({ transaction: txn });
+          deleted++;
+        }
+        continue;
+      }
+
+      // A real mark needs a max out of which it was scored.
+      if (!max_marks) continue;
+
+      const payload = {
+        class_id,
+        max_marks,
+        marks_obtained: is_absent ? null : marks_obtained,
+        is_absent: !!is_absent,
+        remark: remark || null,
+        uploaded_by: teacherId
+      };
+
       if (existing) {
-        await existing.update({
-          class_id,
-          max_marks,
-          marks_obtained: is_absent ? null : marks_obtained,
-          is_absent: !!is_absent,
-          remark: remark || null,
-          uploaded_by: teacherId
-        }, { transaction: txn });
+        await existing.update(payload, { transaction: txn });
         updated++;
       } else {
-        await Mark.create({
-          student_id,
-          class_id,
-          subject,
-          exam_type,
-          max_marks,
-          marks_obtained: is_absent ? null : marks_obtained,
-          is_absent: !!is_absent,
-          remark: remark || null,
-          uploaded_by: teacherId
-        }, { transaction: txn });
+        await Mark.create(
+          { student_id, subject, exam_type, ...payload },
+          { transaction: txn }
+        );
         created++;
       }
     }
 
     await txn.commit();
+    const parts = [`${created} new`, `${updated} updated`];
+    if (deleted) parts.push(`${deleted} cleared`);
     res.json({
       success: true,
-      message: `Marks saved: ${created} new, ${updated} updated`,
+      message: `Marks saved: ${parts.join(', ')}`,
       created,
-      updated
+      updated,
+      deleted
     });
   } catch (error) {
     await txn.rollback();
     console.error('Error saving marks:', error);
     res.status(500).json({ success: false, message: 'Failed to save marks' });
+  }
+};
+
+// ──────────────────────────────────────────────────
+// DELETE MARKS (remove a whole exam+subject, or one student's mark)
+// DELETE /api/teacher/marks
+// body: { class_id, exam_type, subject, student_id? }
+// ──────────────────────────────────────────────────
+const deleteMarks = async (req, res) => {
+  try {
+    const { class_id, exam_type, subject, student_id } = req.body;
+
+    if (!class_id || !exam_type || !subject) {
+      return res.status(400).json({
+        success: false,
+        message: 'class_id, exam_type, and subject are required'
+      });
+    }
+
+    const where = { class_id, exam_type, subject };
+    if (student_id) where.student_id = student_id; // scope to one student if given
+
+    const deleted = await Mark.destroy({ where });
+
+    res.json({
+      success: true,
+      message: student_id
+        ? (deleted ? 'Mark deleted' : 'No mark found to delete')
+        : `Deleted ${deleted} mark${deleted === 1 ? '' : 's'} for ${subject} (${exam_type})`,
+      deleted
+    });
+  } catch (error) {
+    console.error('Error deleting marks:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete marks' });
   }
 };
 
@@ -393,6 +444,7 @@ module.exports = {
   getSubjectsForClass,
   getMarks,
   saveMarks,
+  deleteMarks,
   getOwnResults,
   getExamTypes
 };

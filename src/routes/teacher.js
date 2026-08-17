@@ -79,5 +79,6 @@ router.get('/marks/subjects/:classId', marksController.getSubjectsForClass);
 router.get('/marks/exam-types/:classId', marksController.getExamTypes);
 router.get('/marks/:classId', marksController.getMarks);
 router.post('/marks', marksController.saveMarks);
+router.delete('/marks', marksController.deleteMarks);
 
 module.exports = router;
