@@ -263,8 +263,11 @@ const addClassStudent = async (req, res) => {
   }
 };
 
-// POST /api/teacher/attendance
+// POST /api/teacher/attendance  AND  POST /api/admin/student-attendance
 // Body: { classId, date, records: [{ studentId, status }] }
+// Works for both teachers and admins. When a class teacher marks it we record
+// their teacher id in marked_by_teacher; an admin has no teachers row, so it is
+// stored as null.
 const submitAttendance = async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -276,14 +279,11 @@ const submitAttendance = async (req, res) => {
       return res.status(400).json({ message: 'classId, date, and records array are required' });
     }
 
-    // Find teacher record
+    // The uploader may be a class teacher (record their id) or an admin (null).
     const teacher = await Teacher.findOne({
       where: { user_id: req.user.id },
     });
-
-    if (!teacher) {
-      return res.status(404).json({ message: 'Teacher profile not found' });
-    }
+    const markedBy = teacher ? teacher.id : null;
 
     // Check if attendance already exists for this class + date
     const existingAttendance = await Attendance.findOne({
@@ -298,7 +298,7 @@ const submitAttendance = async (req, res) => {
       // Update existing attendance records
       for (const record of records) {
         await Attendance.update(
-          { status: record.status, marked_by_teacher: teacher.id },
+          { status: record.status, marked_by_teacher: markedBy },
           {
             where: {
               student_id: record.studentId,
@@ -316,7 +316,7 @@ const submitAttendance = async (req, res) => {
         class_id: classId,
         date: date,
         status: record.status,
-        marked_by_teacher: teacher.id,
+        marked_by_teacher: markedBy,
       }));
 
       await Attendance.bulkCreate(attendanceData, { transaction });

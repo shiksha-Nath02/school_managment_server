@@ -13,6 +13,13 @@ const {
   getClassReportCards, getClassAttendanceSummary,
 } = require('../controllers/adminController');
 const { getDashboard } = require('../controllers/dashboardController');
+// Student-attendance marking is shared with the teacher flow — same handlers,
+// mounted here so an admin/superadmin can upload attendance for any class.
+const {
+  getStudentsByClass: getAttendanceStudents,
+  getAttendanceByDate: getStudentAttendanceByDate,
+  submitAttendance: submitStudentAttendance,
+} = require('../controllers/teacherController');
 const { authorize } = require('../middlewares/auth');
 
 router.get('/dashboard', getDashboard);
@@ -28,6 +35,11 @@ router.post('/settings/self-attendance', toggleSelfAttendance);
 // Academic reports & attendance (class-wide, for the admin Reports/Attendance tabs)
 router.get('/report-cards/:classId', getClassReportCards);
 router.get('/class-attendance', getClassAttendanceSummary);
+
+// Student-attendance upload (admin can mark any class — same UI as teachers).
+router.get('/attendance-students/:classId', getAttendanceStudents);
+router.get('/student-attendance/:classId', getStudentAttendanceByDate);
+router.post('/student-attendance', submitStudentAttendance);
 
 // Students
 router.get('/student-lookup', lookupStudent); // by admission number, for sell forms
