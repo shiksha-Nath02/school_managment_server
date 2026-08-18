@@ -27,7 +27,7 @@ const Attendance = sequelize.define('Attendance', {
   },
   marked_by_teacher: {
     type: DataTypes.INTEGER,
-    allowNull: false,
+    allowNull: true, // null = marked by an admin/superadmin (no teachers row)
     references: { model: 'teachers', key: 'id' },
   },
 }, {
