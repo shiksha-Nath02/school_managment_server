@@ -81,6 +81,7 @@ const getMarks = async (req, res) => {
       return {
         student_id: s.id,
         roll_number: s.roll_number,
+        admission_number: s.admission_number,
         name: s.user?.name || `Student ${s.id}`,
         marks: studentMarks
       };
