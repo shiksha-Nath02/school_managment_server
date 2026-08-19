@@ -275,7 +275,16 @@ const removeStudent = async (req, res) => {
 
 const getClasses = async (req, res) => {
   try {
-    const classes = await Class.findAll({ attributes: ['id', 'class_name', 'section'], order: [['class_name', 'ASC'], ['section', 'ASC']] });
+    const classes = await Class.findAll({
+      attributes: ['id', 'class_name', 'section', 'class_teacher_id'],
+      include: [{
+        model: Teacher,
+        as: 'classTeacher',
+        attributes: ['id'],
+        include: [{ model: User, as: 'user', attributes: ['name'] }],
+      }],
+      order: [['class_name', 'ASC'], ['section', 'ASC']],
+    });
     res.json({ classes });
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch classes' });
@@ -286,7 +295,10 @@ const getClasses = async (req, res) => {
 const getAllTeachers = async (req, res) => {
   try {
     const teachers = await Teacher.findAll({
-      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'username', 'email', 'phone', 'is_active'], where: { is_active: true } }],
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'name', 'username', 'email', 'phone', 'is_active'], where: { is_active: true } },
+        { model: Class, as: 'classes', attributes: ['id', 'class_name', 'section'] },
+      ],
       order: [['id', 'ASC']],
     });
     res.json({ teachers });
@@ -399,6 +411,47 @@ const setTeacherPermissions = async (req, res) => {
   } catch (error) {
     console.error('Set teacher permissions error:', error);
     res.status(500).json({ message: 'Failed to update permissions' });
+  }
+};
+
+// PUT /api/admin/teachers/:id/class  — assign (or clear) this teacher's class.
+// One class per teacher: assigning a class first clears any class this teacher
+// already owns, then sets the chosen class's class_teacher_id to this teacher —
+// overwriting (stealing) whoever was the previous class teacher of that class.
+// Pass { class_id: null } to unassign the teacher from all classes.
+const assignTeacherClass = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const teacher = await Teacher.findByPk(req.params.id, { transaction: t });
+    if (!teacher) { await t.rollback(); return res.status(404).json({ message: 'Teacher not found' }); }
+
+    const { class_id } = req.body;
+
+    if (class_id != null) {
+      const klass = await Class.findByPk(class_id, { transaction: t });
+      if (!klass) { await t.rollback(); return res.status(404).json({ message: 'Class not found' }); }
+    }
+
+    // Clear any class this teacher currently owns (enforces one-class-per-teacher).
+    await Class.update(
+      { class_teacher_id: null },
+      { where: { class_teacher_id: teacher.id }, transaction: t }
+    );
+
+    // Assign the chosen class to this teacher (steals it from a previous owner).
+    if (class_id != null) {
+      await Class.update(
+        { class_teacher_id: teacher.id },
+        { where: { id: class_id }, transaction: t }
+      );
+    }
+
+    await t.commit();
+    res.json({ message: class_id != null ? 'Class assigned' : 'Class unassigned', teacherId: teacher.id, classId: class_id ?? null });
+  } catch (error) {
+    await t.rollback();
+    console.error('Assign teacher class error:', error);
+    res.status(500).json({ message: 'Failed to assign class' });
   }
 };
 
@@ -1251,7 +1304,7 @@ module.exports = {
   getStudentAttendance, getStudentMarks, getStudentFees, getStudentInventory, lookupStudent,
   getTeacherAttendanceById, getTeacherClassesById,
   verifyTeacherAttendance,
-  getAllTeachers, addTeacher, updateTeacher, removeTeacher, setTeacherPermissions,
+  getAllTeachers, addTeacher, updateTeacher, removeTeacher, setTeacherPermissions, assignTeacherClass,
   getTeacherAttendance, submitTeacherAttendance,
   checkInTeacher, checkOutTeacher, markTeacherStatus,
   updateTeacherAttendance, bulkMarkAbsent, getTeacherAttendanceSummary, getTeacherAttendancePhotos,
