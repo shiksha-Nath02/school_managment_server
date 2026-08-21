@@ -11,6 +11,8 @@ router.post('/sessions', sessionController.createSession);
 router.put('/sessions/:id/fees', sessionController.updateSessionFees);
 router.put('/sessions/:id/activate', sessionController.activateSession);
 router.post('/sessions/:id/promote', sessionController.promoteStudents);
+router.put('/sessions/:id', sessionController.updateSession);
+router.delete('/sessions/:id', sessionController.deleteSession);
 
 // ── Fee operations ────────────────────────────────
 router.get('/fees/dues', feeController.getStudentsWithDues);
