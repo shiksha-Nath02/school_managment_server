@@ -9,6 +9,7 @@ router.get('/sessions', sessionController.getSessions);
 router.get('/sessions/:id', sessionController.getSessionById);
 router.post('/sessions', sessionController.createSession);
 router.put('/sessions/:id/fees', sessionController.updateSessionFees);
+router.put('/sessions/:id/activate', sessionController.activateSession);
 router.post('/sessions/:id/promote', sessionController.promoteStudents);
 
 // ── Fee operations ────────────────────────────────
