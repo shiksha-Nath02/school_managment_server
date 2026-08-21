@@ -1,4 +1,4 @@
-const { Session, StudentFee, Student, User, Class } = require('../models');
+const { Session, StudentFee, Student, User, Class, FeePayment, AdmissionFee, PaymentLog } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const { recalculateChain } = require('../utils/feeEngine');
@@ -228,6 +228,131 @@ const updateSessionFees = async (req, res) => {
   }
 };
 
+// PUT /api/admin/sessions/:id
+// Update a session's basic settings (name, start month/year, vacation months, fine,
+// admission fee). End month/year is recomputed; overlap with other sessions is rejected.
+const updateSession = async (req, res) => {
+  const txn = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const {
+      name, start_month, start_year, excluded_months,
+      fine_enabled, fine_per_day, grace_period_days, admission_fee
+    } = req.body;
+
+    const session = await Session.findByPk(id, { transaction: txn });
+    if (!session) {
+      await txn.rollback();
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    const sm = start_month != null ? parseInt(start_month) : session.start_month;
+    const sy = start_year != null ? parseInt(start_year) : session.start_year;
+    let em = sm - 1, ey = sy + 1;
+    if (em === 0) { em = 12; ey = sy; }
+
+    // Overlap check against every OTHER session
+    const others = await Session.findAll({ where: { id: { [Op.ne]: session.id } }, transaction: txn });
+    const newStart = sy * 12 + sm;
+    const newEnd = ey * 12 + em;
+    for (const s of others) {
+      const existStart = s.start_year * 12 + s.start_month;
+      const existEnd = s.end_year * 12 + s.end_month;
+      if (newStart <= existEnd && newEnd >= existStart) {
+        await txn.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `Session overlaps with existing session "${s.name}" (${s.start_month}/${s.start_year} - ${s.end_month}/${s.end_year})`
+        });
+      }
+    }
+
+    await session.update({
+      name: name ?? session.name,
+      start_month: sm,
+      start_year: sy,
+      end_month: em,
+      end_year: ey,
+      excluded_months: excluded_months ?? session.excluded_months,
+      fine_enabled: fine_enabled ?? session.fine_enabled,
+      fine_per_day: fine_enabled === false ? 0 : (fine_per_day ?? session.fine_per_day),
+      grace_period_days: grace_period_days ?? session.grace_period_days,
+      admission_fee: admission_fee ?? session.admission_fee
+    }, { transaction: txn });
+
+    await txn.commit();
+    res.json({ success: true, message: 'Session updated successfully', session });
+  } catch (error) {
+    await txn.rollback();
+    console.error('Error updating session:', error);
+    res.status(500).json({ success: false, message: 'Failed to update session' });
+  }
+};
+
+// DELETE /api/admin/sessions/:id
+// Remove a session and EVERYTHING tied to it, in one transaction:
+//  - student_fees + admission_fees cascade via the session_id FK
+//  - fee_payments in the session's billing-month window (sessions can't overlap, so
+//    those rows belong to this session) are removed explicitly (no session_id FK)
+//  - payment_log rows referencing those fee_payments / admission_fees are removed
+const deleteSession = async (req, res) => {
+  const txn = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const session = await Session.findByPk(id, { transaction: txn });
+    if (!session) {
+      await txn.rollback();
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    const lo = session.start_year * 12 + session.start_month;
+    const hi = session.end_year * 12 + session.end_month;
+
+    // fee_payments in this session's billing window (lo/hi are integers from the row itself)
+    const fps = await FeePayment.findAll({
+      where: sequelize.literal(`billing_year * 12 + billing_month BETWEEN ${lo} AND ${hi}`),
+      attributes: ['id'],
+      transaction: txn
+    });
+    const fpIds = fps.map(f => f.id);
+
+    const adms = await AdmissionFee.findAll({
+      where: { session_id: session.id },
+      attributes: ['id'],
+      paranoid: false,
+      transaction: txn
+    });
+    const admIds = adms.map(a => a.id);
+
+    // payment_log entries referencing those fee_payments / admission_fees
+    let logsDeleted = 0;
+    const logOr = [];
+    if (fpIds.length) logOr.push({ reference_type: 'fee_payments', reference_id: { [Op.in]: fpIds } });
+    if (admIds.length) logOr.push({ reference_type: 'admission_fees', reference_id: { [Op.in]: admIds } });
+    if (logOr.length) {
+      logsDeleted = await PaymentLog.destroy({ where: { [Op.or]: logOr }, transaction: txn });
+    }
+
+    const fpDeleted = fpIds.length
+      ? await FeePayment.destroy({ where: { id: { [Op.in]: fpIds } }, transaction: txn })
+      : 0;
+
+    // Delete the session — student_fees + admission_fees cascade via FK (force = hard delete)
+    await session.destroy({ transaction: txn, force: true });
+
+    await txn.commit();
+    res.json({
+      success: true,
+      message: 'Session and its fees deleted',
+      deleted: { fee_payments: fpDeleted, payment_logs: logsDeleted }
+    });
+  } catch (error) {
+    await txn.rollback();
+    console.error('Error deleting session:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete session' });
+  }
+};
+
 // PUT /api/admin/sessions/:id/activate
 // Make a draft/inactive session live — deactivates all others in one transaction.
 const activateSession = async (req, res) => {
@@ -287,7 +412,9 @@ module.exports = {
   getActiveSession,
   getSessionById,
   createSession,
+  updateSession,
   updateSessionFees,
+  deleteSession,
   activateSession,
   promoteStudents
 };
