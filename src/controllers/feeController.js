@@ -636,6 +636,7 @@ const getStudentsWithDues = async (req, res) => {
       const fine = fineData.fine || 0;
       return {
         id: student.id,
+        admission_number: student.admission_number,
         name: student.user?.name,
         phone: student.user?.phone,
         // Father's phone drives the dues-list Phone column; fall back to the

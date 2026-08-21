@@ -63,8 +63,13 @@ const createSession = async (req, res) => {
       name, start_month, start_year,
       excluded_months, fine_enabled, fine_per_day, grace_period_days, admission_fee,
       default_monthly_fee, copy_from_session_id, fee_increase_percent,
-      student_fees // optional: array of { student_id, monthly_fee, discount, discount_reason }
+      student_fees, // optional: array of { student_id, monthly_fee, discount, discount_reason }
+      is_active     // optional: pass false to create a DRAFT (does not deactivate the live session)
     } = req.body;
+
+    // Default true (legacy behaviour). Explicit false => draft session left inactive
+    // so a half-finished setup can never knock the current live session offline.
+    const makeActive = is_active !== false;
 
     if (!name || !start_month || !start_year) {
       await txn.rollback();
@@ -96,8 +101,10 @@ const createSession = async (req, res) => {
       }
     }
 
-    // Deactivate all other sessions
-    await Session.update({ is_active: false }, { where: {}, transaction: txn });
+    // Deactivate all other sessions only when this one is going live now.
+    if (makeActive) {
+      await Session.update({ is_active: false }, { where: {}, transaction: txn });
+    }
 
     // Create the session
     const session = await Session.create({
@@ -111,7 +118,7 @@ const createSession = async (req, res) => {
       fine_per_day: fine_per_day || 0,
       grace_period_days: grace_period_days || 10,
       admission_fee: admission_fee || 0,
-      is_active: true,
+      is_active: makeActive,
       created_by: req.user?.id || null
     }, { transaction: txn });
 
@@ -221,6 +228,30 @@ const updateSessionFees = async (req, res) => {
   }
 };
 
+// PUT /api/admin/sessions/:id/activate
+// Make a draft/inactive session live — deactivates all others in one transaction.
+const activateSession = async (req, res) => {
+  const txn = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const session = await Session.findByPk(id, { transaction: txn });
+    if (!session) {
+      await txn.rollback();
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+
+    await Session.update({ is_active: false }, { where: {}, transaction: txn });
+    await session.update({ is_active: true }, { transaction: txn });
+
+    await txn.commit();
+    res.json({ success: true, message: 'Session activated', session });
+  } catch (error) {
+    await txn.rollback();
+    console.error('Error activating session:', error);
+    res.status(500).json({ success: false, message: 'Failed to activate session' });
+  }
+};
+
 // POST /api/admin/sessions/:id/promote
 // Promote students to next class for a new session
 const promoteStudents = async (req, res) => {
@@ -257,5 +288,6 @@ module.exports = {
   getSessionById,
   createSession,
   updateSessionFees,
+  activateSession,
   promoteStudents
 };
