@@ -13,6 +13,7 @@ const {
   getClassReportCards, getClassAttendanceSummary,
 } = require('../controllers/adminController');
 const { getDashboard } = require('../controllers/dashboardController');
+const { listHolidays, addHoliday, deleteHoliday } = require('../controllers/holidayController');
 // Student-attendance marking is shared with the teacher flow — same handlers,
 // mounted here so an admin/superadmin can upload attendance for any class.
 const {
@@ -31,6 +32,11 @@ router.put('/users/:userId/reset-password', authorize('superadmin'), resetUserPa
 // Self-attendance settings
 router.get('/settings/self-attendance', getSelfAttendanceSetting);
 router.post('/settings/self-attendance', toggleSelfAttendance);
+
+// Holidays (school-wide non-working days)
+router.get('/holidays', listHolidays);
+router.post('/holidays', addHoliday);
+router.delete('/holidays/:id', deleteHoliday);
 
 // Academic reports & attendance (class-wide, for the admin Reports/Attendance tabs)
 router.get('/report-cards/:classId', getClassReportCards);
