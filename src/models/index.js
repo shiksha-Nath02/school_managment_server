@@ -30,6 +30,7 @@ const Circular = require('./Circular');
 const AppSetting = require('./AppSetting');
 const Staff = require('./Staff');
 const Enquiry = require('./Enquiry');
+const Holiday = require('./Holiday');
 
 // ===== ASSOCIATIONS =====
 
@@ -160,4 +161,5 @@ module.exports = {
   AppSetting,
   Staff,
   Enquiry,
+  Holiday,
 };
