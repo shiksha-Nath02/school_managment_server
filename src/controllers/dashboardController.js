@@ -1,8 +1,9 @@
 const { Op } = require('sequelize');
 const {
   Student, Teacher, User, Class, FeePayment, TeacherAttendance,
-  PaymentLog, UniformPayment, BookPayment, Expense, Attendance,
+  PaymentLog, UniformPayment, BookPayment, Expense, Attendance, Holiday,
 } = require('../models');
+const { istToday, istDayOfWeek } = require('../utils/dateUtils');
 
 // Derive a Paid/Partial/Due label from a fee payment row.
 const paymentStatus = (row) => {
@@ -27,7 +28,7 @@ const getDashboard = async (req, res) => {
     const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`;
     const lastDay = new Date(year, month + 1, 0).getDate();
     const monthEnd = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-    const today = now.toISOString().split('T')[0];
+    const today = istToday(); // business "today" in IST (server may be UTC)
     const monthRange = { [Op.between]: [monthStart, monthEnd] };
 
     const [
@@ -43,6 +44,7 @@ const getDashboard = async (req, res) => {
       attendanceRecords,
       allClasses,
       classesMarkedToday,
+      holidayToday,
     ] = await Promise.all([
       Student.count({ where: { status: { [Op.in]: ['active', 'promoted'] } } }),
       Teacher.count({
@@ -81,16 +83,24 @@ const getDashboard = async (req, res) => {
       Class.findAll({ attributes: ['id', 'class_name', 'section'], order: [['id', 'ASC']] }),
       // Distinct classes that already have student attendance marked for today.
       Attendance.findAll({ where: { date: today }, attributes: ['class_id'], group: ['class_id'], raw: true }),
+      // Is today a declared holiday? (Sundays handled separately in code.)
+      Holiday.findOne({ where: { date: today } }),
     ]);
 
     const totalIncome = parseFloat(logIncome || 0) + parseFloat(uniformIncome || 0) + parseFloat(bookIncome || 0);
     const totalExpenditure = parseFloat(logExpenditure || 0) + parseFloat(expenseTotal || 0);
 
     // Today's student-attendance progress: which classes are done vs still pending.
+    // Sundays and declared holidays are non-working days — no class is "pending".
+    const isSunday = istDayOfWeek() === 0;
+    const isHoliday = isSunday || !!holidayToday;
+    const holidayReason = holidayToday ? holidayToday.reason : (isSunday ? 'Sunday' : null);
+
     const markedClassIds = new Set(classesMarkedToday.map((r) => r.class_id));
     const clsLabel = (c) => (c.section ? `${c.class_name}-${c.section}` : c.class_name);
     const doneClasses = allClasses.filter((c) => markedClassIds.has(c.id));
-    const pendingClasses = allClasses.filter((c) => !markedClassIds.has(c.id));
+    // On a holiday nothing is pending; otherwise it's the unmarked classes.
+    const pendingClasses = isHoliday ? [] : allClasses.filter((c) => !markedClassIds.has(c.id));
 
     res.json({
       success: true,
@@ -115,6 +125,9 @@ const getDashboard = async (req, res) => {
         checkInTime: r.check_in_time || null,
       })),
       classAttendanceToday: {
+        date: today,
+        isHoliday,
+        holidayReason,
         totalClasses: allClasses.length,
         doneCount: doneClasses.length,
         pendingCount: pendingClasses.length,
