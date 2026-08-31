@@ -35,19 +35,47 @@ const mapWithConcurrency = async (items, limit, fn) => {
   return results;
 };
 
+// Open a DB transaction, retrying briefly if the pool is momentarily exhausted.
+// Without this, a transient ConnectionAcquireTimeoutError under load surfaces as
+// a hard failure and (in bulk entry) silently drops that student's payment.
+const beginTxnWithRetry = async (retries = 3, delayMs = 200) => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await sequelize.transaction();
+    } catch (err) {
+      const transient = /Acquire|timeout|ETIMEDOUT|ECONNRESET|PROTOCOL_CONNECTION_LOST/i.test(err.message || '');
+      if (!transient || attempt > retries) throw err;
+      await new Promise((r) => setTimeout(r, delayMs * attempt));
+    }
+  }
+};
+
 // ──────────────────────────────────────────────────
 // RECORD A SINGLE PAYMENT
 // POST /api/admin/fees/pay
 // Body: { student_id, amount, payment_date, payment_method, billing_month, billing_year, include_fine, remarks }
 // ──────────────────────────────────────────────────
 const recordPayment = async (req, res) => {
-  const txn = await sequelize.transaction();
+  const txn = await beginTxnWithRetry();
   try {
-    const { student_id, amount, payment_date, payment_method, billing_month, billing_year, include_fine, remarks } = req.body;
+    let { student_id } = req.body;
+    const { admission_number, amount, payment_date, payment_method, billing_month, billing_year, include_fine, remarks } = req.body;
+
+    // Accept an admission_number as an alternative to the primary-key student_id.
+    // admission_number is NOT the PK (e.g. adm "1608" -> student id 496), so callers
+    // that only have the admission number must be resolved here, never treated as the id.
+    if (!student_id && admission_number != null && String(admission_number).trim() !== '') {
+      const stu = await Student.findOne({ where: { admission_number: String(admission_number).trim() }, transaction: txn });
+      if (!stu) {
+        await txn.rollback();
+        return res.status(404).json({ success: false, message: `No student found with admission number ${admission_number}` });
+      }
+      student_id = stu.id;
+    }
 
     if (!student_id || amount == null || !payment_date || !payment_method || !billing_month || !billing_year) {
       await txn.rollback();
-      return res.status(400).json({ success: false, message: 'student_id, amount, payment_date, payment_method, billing_month, billing_year are required' });
+      return res.status(400).json({ success: false, message: 'student_id (or admission_number), amount, payment_date, payment_method, billing_month, billing_year are required' });
     }
 
     // Lock: get student's last payment row with row lock
@@ -279,7 +307,7 @@ const recordBulkPayment = async (req, res) => {
     // Process a line if there is monthly OR admission activity.
     if (!p.student_id || (!doMonthly && !doAdmission)) continue;
 
-    const txn = await sequelize.transaction();
+    const txn = await beginTxnWithRetry();
     try {
       let receiptNum = null, newPending = null;
 

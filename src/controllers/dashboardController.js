@@ -61,10 +61,11 @@ const getDashboard = async (req, res) => {
       BookPayment.sum('amount_paid', { where: { payment_date: monthRange } }),
       // All expenditure reasons (stationary, pantry, inventory, salary, …).
       Expense.sum('amount', { where: { date: monthRange } }),
+      // Today's full fee collection (not just the latest 5) so nothing paid today is hidden.
       FeePayment.findAll({
-        where: { is_system_generated: false, amount_paid: { [Op.gt]: 0 } },
-        order: [['payment_date', 'DESC'], ['id', 'DESC']],
-        limit: 5,
+        where: { is_system_generated: false, amount_paid: { [Op.gt]: 0 }, payment_date: today },
+        order: [['id', 'DESC']],
+        limit: 200, // safety cap; a single day's collection won't realistically exceed this
         include: [{
           model: Student,
           as: 'student',
