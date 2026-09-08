@@ -61,7 +61,7 @@ const createSession = async (req, res) => {
   try {
     const {
       name, start_month, start_year,
-      excluded_months, fine_enabled, fine_per_day, grace_period_days, admission_fee,
+      excluded_months, fine_enabled, fine_per_day, grace_period_days, annual_fee, admission_fee,
       default_monthly_fee, copy_from_session_id, fee_increase_percent,
       student_fees, // optional: array of { student_id, monthly_fee, discount, discount_reason }
       is_active     // optional: pass false to create a DRAFT (does not deactivate the live session)
@@ -117,7 +117,8 @@ const createSession = async (req, res) => {
       fine_enabled: fine_enabled || false,
       fine_per_day: fine_per_day || 0,
       grace_period_days: grace_period_days || 10,
-      admission_fee: admission_fee || 0,
+      // Accept new `annual_fee`, fall back to legacy `admission_fee` payload key.
+      annual_fee: (annual_fee ?? admission_fee) || 0,
       is_active: makeActive,
       created_by: req.user?.id || null
     }, { transaction: txn });
@@ -230,14 +231,14 @@ const updateSessionFees = async (req, res) => {
 
 // PUT /api/admin/sessions/:id
 // Update a session's basic settings (name, start month/year, vacation months, fine,
-// admission fee). End month/year is recomputed; overlap with other sessions is rejected.
+// annual fee). End month/year is recomputed; overlap with other sessions is rejected.
 const updateSession = async (req, res) => {
   const txn = await sequelize.transaction();
   try {
     const { id } = req.params;
     const {
       name, start_month, start_year, excluded_months,
-      fine_enabled, fine_per_day, grace_period_days, admission_fee
+      fine_enabled, fine_per_day, grace_period_days, annual_fee, admission_fee
     } = req.body;
 
     const session = await Session.findByPk(id, { transaction: txn });
@@ -277,7 +278,8 @@ const updateSession = async (req, res) => {
       fine_enabled: fine_enabled ?? session.fine_enabled,
       fine_per_day: fine_enabled === false ? 0 : (fine_per_day ?? session.fine_per_day),
       grace_period_days: grace_period_days ?? session.grace_period_days,
-      admission_fee: admission_fee ?? session.admission_fee
+      // Accept new `annual_fee`, fall back to legacy `admission_fee` payload key.
+      annual_fee: (annual_fee ?? admission_fee) ?? session.annual_fee
     }, { transaction: txn });
 
     await txn.commit();

@@ -445,8 +445,10 @@ const recordBulkPayment = async (req, res) => {
               direction: 'income',
               amount: admPay,
               date: payment_date,
-              description: `Admission fee by ${sName} (Class ${cName})`,
+              description: `Annual fee by ${sName} (Class ${cName})`,
               reference_id: adm.id,
+              // Legacy label kept for the (now) annual_fees table so historical
+              // payment_log rows stay consistent; do not rename without a data migration.
               reference_type: 'admission_fees',
               recorded_by: req.user?.id || null
             }, { transaction: txn });
