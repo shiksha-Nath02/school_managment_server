@@ -24,9 +24,9 @@ const ANNUAL_CHARGE = parseFloat(process.argv[2]) || 4000;
     const session = await Session.findOne({ where: { is_active: true } });
     if (!session) { console.error('No active session found. Aborting.'); process.exitCode = 1; return; }
 
-    // Set the session's annual admission charge (so new students inherit it).
-    await session.update({ admission_fee: ANNUAL_CHARGE });
-    console.log(`Active session: ${session.name} — admission charge set to ${ANNUAL_CHARGE}`);
+    // Set the session's annual fee (so new students inherit it).
+    await session.update({ annual_fee: ANNUAL_CHARGE });
+    console.log(`Active session: ${session.name} — annual fee set to ${ANNUAL_CHARGE}`);
 
     const students = await Student.findAll({
       where: { status: { [Op.in]: ['active', 'promoted'] } },

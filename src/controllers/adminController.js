@@ -122,7 +122,7 @@ const addStudent = async (req, res) => {
       await AdmissionFee.create({
         student_id: student.id,
         session_id: activeSession.id,
-        annual_charge: parseFloat(activeSession.admission_fee) || 0,
+        annual_charge: parseFloat(activeSession.annual_fee) || 0,
         discount: 0,
         paid_amount: 0,
         assumed_paid: false,
