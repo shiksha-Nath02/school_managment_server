@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
-const { User, Student, Teacher, Class, Attendance } = require('../models');
+const { User, Student, Teacher, Class, Attendance, Session, AdmissionFee } = require('../models');
 const TeacherAttendance = require('../models/TeacherAttendance');
 const { saveBase64Image } = require('../utils/imageHelper');
 const { publicUrl } = require('../utils/s3');
@@ -247,6 +247,22 @@ const addClassStudent = async (req, res) => {
       nationality: req.body.nationality || 'Indian',
       admission_date: req.body.admission_date || new Date(),
     }, { transaction: t });
+
+    // Give the new student a pending annual-fee row for the active session
+    // (inherits the session's annual charge). New = not assumed paid. Mirrors
+    // adminController.addStudent so teacher-added students aren't left without one.
+    const activeSession = await Session.findOne({ where: { is_active: true }, transaction: t });
+    if (activeSession) {
+      await AdmissionFee.create({
+        student_id: student.id,
+        session_id: activeSession.id,
+        annual_charge: parseFloat(activeSession.annual_fee) || 0,
+        discount: 0,
+        paid_amount: 0,
+        assumed_paid: false,
+      }, { transaction: t });
+    }
+
     await t.commit();
 
     const full = await Student.findByPk(student.id, {
