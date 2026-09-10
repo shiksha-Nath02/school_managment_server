@@ -419,12 +419,20 @@ const recordBulkPayment = async (req, res) => {
       // ── Admission fee (independent of monthly) ──
       let admissionPaid = 0;
       if (doAdmission) {
-        const adm = await AdmissionFee.findOne({
+        // A student added via the teacher "add to my class" flow may have no
+        // annual-fee row yet. Create it on the fly (inheriting the session's
+        // annual charge) so the entry never silently no-ops. New = not assumed paid.
+        const [adm] = await AdmissionFee.findOrCreate({
           where: { student_id: p.student_id, session_id: activeSession.id },
-          lock: txn.LOCK.UPDATE,
+          defaults: {
+            annual_charge: parseFloat(activeSession.annual_fee) || 0,
+            discount: 0,
+            paid_amount: 0,
+            assumed_paid: false,
+          },
           transaction: txn
         });
-        if (adm) {
+        {
           const newDiscount = hasAdmDiscount ? admDiscount : parseFloat(adm.discount);
           await adm.update({
             discount: newDiscount,
@@ -565,6 +573,19 @@ const getStudentFeeHistory = async (req, res) => {
           paid_amount: paid,
           assumed_paid: adm.assumed_paid,
           due: adm.assumed_paid ? 0 : Math.max(0, charge - disc - paid),
+        };
+      } else {
+        // No annual-fee row yet (e.g. a teacher-added student). Surface the
+        // session's annual charge as due so the bulk screen shows it and keeps
+        // the input enabled — the row is created on first entry (findOrCreate
+        // in recordBulkPayment).
+        const charge = parseFloat(activeSession.annual_fee) || 0;
+        admissionFee = {
+          annual_charge: charge,
+          discount: 0,
+          paid_amount: 0,
+          assumed_paid: false,
+          due: charge,
         };
       }
     }
