@@ -1,4 +1,4 @@
-const { FeePayment, StudentFee, Student, User, Class, Session, PaymentLog, UniformPayment, UniformTransaction, BookPayment, BookTransaction, Expense, AdmissionFee } = require('../models');
+const { FeePayment, StudentFee, Student, User, Class, Session, PaymentLog, UniformPayment, UniformTransaction, BookPayment, BookTransaction, Expense, AdmissionFee, TransactionDeletionLog } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const {
@@ -664,6 +664,48 @@ const getStudentsWithDues = async (req, res) => {
 
     const { month: curMonth, year: curYear } = currentBillingPeriod();
 
+    // ── Uniform / book / annual dues, one grouped query each (avoids N+1) ──
+    // Uniform & book "due" per sale is floored at 0 (GREATEST) so an overpaid
+    // sale never masks another sale's due, matching the per-sale `left` the sale
+    // screens show. Paranoid scope auto-excludes soft-deleted sales. Annual due =
+    // annual_charge - discount - paid_amount for the ACTIVE session, ignoring
+    // assumed_paid (pre-tracking) rows. Rows without a student_id can't be
+    // attributed and are skipped.
+    const activeSession = await Session.findOne({ where: { is_active: true } });
+
+    const toDueMap = (rows) => {
+      const m = new Map();
+      for (const r of rows) m.set(r.student_id, parseFloat(r.due) || 0);
+      return m;
+    };
+
+    const [uniformRows, bookRows, annualRows] = await Promise.all([
+      UniformTransaction.findAll({
+        attributes: ['student_id', [sequelize.fn('SUM', sequelize.literal('GREATEST(to_be_paid - paid, 0)')), 'due']],
+        where: { status: 'active', student_id: { [Op.ne]: null } },
+        group: ['student_id'],
+        raw: true,
+      }),
+      BookTransaction.findAll({
+        attributes: ['student_id', [sequelize.fn('SUM', sequelize.literal('GREATEST(to_be_paid - paid, 0)')), 'due']],
+        where: { student_id: { [Op.ne]: null } },
+        group: ['student_id'],
+        raw: true,
+      }),
+      activeSession
+        ? AdmissionFee.findAll({
+            attributes: ['student_id', [sequelize.fn('SUM', sequelize.literal('GREATEST(annual_charge - discount - paid_amount, 0)')), 'due']],
+            where: { session_id: activeSession.id, assumed_paid: false, student_id: { [Op.ne]: null } },
+            group: ['student_id'],
+            raw: true,
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const uniformMap = toDueMap(uniformRows);
+    const bookMap = toDueMap(bookRows);
+    const annualMap = toDueMap(annualRows);
+
     // Each student's work is independent (per-student row lock), so fan out with
     // bounded concurrency instead of awaiting one student at a time.
     const perStudent = await mapWithConcurrency(students, 10, async (student) => {
@@ -680,11 +722,21 @@ const getStudentsWithDues = async (req, res) => {
         order: [['billing_year', 'DESC'], ['billing_month', 'DESC'], ['id', 'DESC']]
       });
 
-      const pending = lastRow ? parseFloat(lastRow.pending_after) : 0;
-      if (pending <= 0) return null;
+      const rawPending = lastRow ? parseFloat(lastRow.pending_after) : 0;
+      // A credit balance (negative) is not a due; floor at 0 for this report.
+      const feeDue = rawPending > 0 ? rawPending : 0;
 
       const fineData = await calculateFine(student.id);
       const fine = fineData.fine || 0;
+
+      const uniformDue = uniformMap.get(student.id) || 0;
+      const bookDue = bookMap.get(student.id) || 0;
+      const annualDue = annualMap.get(student.id) || 0;
+
+      const totalDue = feeDue + fine + uniformDue + bookDue + annualDue;
+      // Keep a student if they owe ANYTHING across fees / uniform / book / annual.
+      if (totalDue <= 0) return null;
+
       return {
         id: student.id,
         admission_number: student.admission_number,
@@ -697,16 +749,21 @@ const getStudentsWithDues = async (req, res) => {
         class_id: student.class_id,
         roll_number: student.roll_number,
         category: student.category || null,
-        pending,
+        // `pending` = monthly fee dues (kept for backward compatibility); the new
+        // per-type fields break the total down.
+        pending: feeDue,
         fine,
-        total_due: pending + fine,
+        uniform_due: uniformDue,
+        book_due: bookDue,
+        annual_due: annualDue,
+        total_due: totalDue,
         last_billing_month: lastRow?.billing_month,
         last_billing_year: lastRow?.billing_year
       };
     });
 
     const studentsWithDues = perStudent.filter(Boolean);
-    studentsWithDues.sort((a, b) => sort === 'asc' ? a.pending - b.pending : b.pending - a.pending);
+    studentsWithDues.sort((a, b) => sort === 'asc' ? a.total_due - b.total_due : b.total_due - a.total_due);
 
     res.json({
       success: true,
@@ -911,6 +968,101 @@ const recordReversal = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────────
+// DELETE A FEE PAYMENT (hard delete + audit log)
+// DELETE /api/admin/fees/payment/:id
+// Body: { reason }
+// Permanently removes the fee_payments row AND its payment_log mirror(s), recomputes
+// the student's running balance, and records the deletion (who / when / what / reason)
+// in transaction_deletion_logs. That log is surfaced read-only in the Transactions tab.
+// The deletion is irreversible by design — the audit log is the only trace.
+// ──────────────────────────────────────────────────
+const deletePayment = async (req, res) => {
+  const txn = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || !String(reason).trim()) {
+      await txn.rollback();
+      return res.status(400).json({ success: false, message: 'A reason is required to delete an entry' });
+    }
+
+    const row = await FeePayment.findByPk(id, { transaction: txn, lock: txn.LOCK.UPDATE });
+    if (!row) {
+      await txn.rollback();
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
+    if (row.is_system_generated) {
+      await txn.rollback();
+      return res.status(400).json({ success: false, message: 'Cannot delete a system-generated row' });
+    }
+    if (row.is_reversal) {
+      await txn.rollback();
+      return res.status(400).json({ success: false, message: 'Cannot delete a reversal entry' });
+    }
+    // A row that already has a reversal mirror can't be hard-deleted — the mirror
+    // would be orphaned and recalculateChain would double-count.
+    const existingReversal = await FeePayment.findOne({ where: { reversal_for: id }, transaction: txn });
+    if (existingReversal) {
+      await txn.rollback();
+      return res.status(400).json({ success: false, message: 'This payment has a reversal; delete is not applicable' });
+    }
+
+    // Snapshot the row for the audit log before it's gone.
+    const student = await Student.findByPk(row.student_id, {
+      include: [{ model: User, as: 'user', attributes: ['name'] }],
+      transaction: txn,
+    });
+    const studentName = student?.user?.name || 'Unknown';
+    const admNo = student?.admission_number || '';
+    const amount = parseFloat(row.amount_paid) || 0;
+    const studentId = row.student_id;
+    const billingMonth = row.billing_month;
+    const billingYear = row.billing_year;
+    const txnDate = row.payment_date || null;
+    const descParts = [
+      `Fee payment ₹${amount.toLocaleString('en-IN')}`,
+      `${studentName}${admNo ? ` (Adm ${admNo})` : ''}`,
+      `for ${billingMonth}/${billingYear}`,
+    ];
+    if (row.receipt_number) descParts.push(`Receipt ${row.receipt_number}`);
+
+    // Remove the mirrored income (fees + fine) from payment_log so reports aren't
+    // inflated. Legacy rows logged without a reference_id can't be matched here.
+    await PaymentLog.destroy({
+      where: { reference_type: 'fee_payments', reference_id: row.id },
+      transaction: txn,
+    });
+
+    // Hard-delete the fee_payments row (model is not paranoid → real delete).
+    await row.destroy({ transaction: txn });
+
+    // Recompute the running balance from that month onward (the row is gone).
+    await recalculateChain(studentId, billingMonth, billingYear, txn);
+
+    // Record the deletion in the audit log (surfaced in the Transactions tab).
+    await TransactionDeletionLog.create({
+      source: 'fee_payment',
+      ledger_ref: `fee_${id}`,
+      amount,
+      txn_date: txnDate,
+      description: descParts.join(' · '),
+      student_id: studentId,
+      student_name: studentName,
+      reason: String(reason).trim(),
+      deleted_by: req.user?.id || null,
+    }, { transaction: txn });
+
+    await txn.commit();
+    res.json({ success: true, message: 'Payment deleted' });
+  } catch (error) {
+    await txn.rollback();
+    console.error('Error deleting payment:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete payment' });
+  }
+};
+
+// ──────────────────────────────────────────────────
 // PROFIT REPORT — consolidated across all sources
 // GET /api/admin/profit?from=YYYY-MM-DD&to=YYYY-MM-DD
 // ──────────────────────────────────────────────────
@@ -1043,7 +1195,15 @@ const getTransactions = async (req, res) => {
       return {};
     };
 
-    const [paymentLogs, uniformPayments, bookPayments, expenses] = await Promise.all([
+    // Deletion log is timestamped with a full DATETIME (created_at), so widen the
+    // range to whole days — otherwise same-day deletions fall outside a from=to=today
+    // window.
+    const delWhere = {};
+    if (from && to) delWhere.created_at = { [Op.between]: [`${from} 00:00:00`, `${to} 23:59:59`] };
+    else if (from)  delWhere.created_at = { [Op.gte]: `${from} 00:00:00` };
+    else if (to)    delWhere.created_at = { [Op.lte]: `${to} 23:59:59` };
+
+    const [paymentLogs, uniformPayments, bookPayments, expenses, deletionLogs] = await Promise.all([
       PaymentLog.findAll({ where: dateCond('date') }),
       UniformPayment.findAll({
         where: dateCond('payment_date'),
@@ -1054,6 +1214,10 @@ const getTransactions = async (req, res) => {
         include: [{ model: BookTransaction, as: 'transaction', attributes: ['admission_number', 'student_name'] }],
       }),
       Expense.findAll({ where: dateCond('date') }),
+      TransactionDeletionLog.findAll({
+        where: delWhere,
+        include: [{ model: User, as: 'deleter', attributes: ['name'] }],
+      }),
     ]);
 
     const transactions = [];
@@ -1099,6 +1263,29 @@ const getTransactions = async (req, res) => {
         amount: parseFloat(exp.amount),
         date: exp.date,
         description: exp.description || `${expTypeLabel(exp.category)} expense`,
+      });
+    }
+
+    // Deletion-log entries — informational rows (direction 'none' → excluded from
+    // totals and the income/expenditure filter, shown under "All").
+    const localDate = (dt) => {
+      const x = new Date(dt);
+      return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+    };
+    const fmtDT = (dt) => {
+      try {
+        return new Date(dt).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      } catch { return ''; }
+    };
+    for (const d of deletionLogs) {
+      const by = d.deleter?.name || 'admin';
+      transactions.push({
+        id: `del_${d.id}`,
+        type: 'deleted',
+        direction: 'none',
+        amount: parseFloat(d.amount) || 0,
+        date: localDate(d.created_at),
+        description: `${d.description} — deleted by ${by} on ${fmtDT(d.created_at)}${d.reason ? ` · ${d.reason}` : ''}`,
       });
     }
 
@@ -1249,6 +1436,7 @@ module.exports = {
   getStudentsWithDues,
   getClasswiseReport,
   recordReversal,
+  deletePayment,
   getProfitReport,
   getPaymentLog,
   getTransactions,

@@ -31,6 +31,7 @@ const AppSetting = require('./AppSetting');
 const Staff = require('./Staff');
 const Enquiry = require('./Enquiry');
 const Holiday = require('./Holiday');
+const TransactionDeletionLog = require('./TransactionDeletionLog');
 
 // ===== ASSOCIATIONS =====
 
@@ -128,6 +129,9 @@ BookTransaction.belongsTo(BookItem, { foreignKey: 'item_id', as: 'item' });
 BookTransaction.hasMany(BookPayment, { foreignKey: 'transaction_id', as: 'payments' });
 BookPayment.belongsTo(BookTransaction, { foreignKey: 'transaction_id', as: 'transaction' });
 
+// Deletion-log attribution
+TransactionDeletionLog.belongsTo(User, { foreignKey: 'deleted_by', as: 'deleter' });
+
 module.exports = {
   sequelize,
   User,
@@ -162,4 +166,5 @@ module.exports = {
   Staff,
   Enquiry,
   Holiday,
+  TransactionDeletionLog,
 };
