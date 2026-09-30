@@ -21,6 +21,7 @@ router.get('/fees/student/:id', feeController.getStudentFeeHistory);
 router.post('/fees/pay', feeController.recordPayment);
 router.post('/fees/bulk-pay', feeController.recordBulkPayment);
 router.post('/fees/reverse/:id', feeController.recordReversal);
+router.delete('/fees/payment/:id', feeController.deletePayment);
 
 // ── Payment log ───────────────────────────────────
 router.get('/payment-log', feeController.getPaymentLog);
