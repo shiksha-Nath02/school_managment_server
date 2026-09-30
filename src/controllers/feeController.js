@@ -548,7 +548,9 @@ const getStudentFeeHistory = async (req, res) => {
         adjustment: parseFloat(row.adjustment || 0),
         advance: parseFloat(row.advance || 0),
         remarks: row.remarks,
-        created_at: row.created_at   // when the entry was fed into the system
+        // Timestamp attribute is camelCase (`createdAt`) even though underscored:true
+        // makes the column snake_case. Keep the API key `created_at` for the frontend.
+        created_at: row.createdAt   // when the entry was fed into the system
       };
     });
 
@@ -603,8 +605,8 @@ const getStudentFeeHistory = async (req, res) => {
       discount: parseFloat(a.discount),
       paid_amount: parseFloat(a.paid_amount),
       assumed_paid: a.assumed_paid,
-      created_at: a.created_at,   // when fed into the system
-      updated_at: a.updated_at,   // last payment/change
+      created_at: a.createdAt,   // when fed into the system
+      updated_at: a.updatedAt,   // last payment/change
     }));
 
     res.json({
@@ -1199,9 +1201,9 @@ const getTransactions = async (req, res) => {
     // range to whole days — otherwise same-day deletions fall outside a from=to=today
     // window.
     const delWhere = {};
-    if (from && to) delWhere.created_at = { [Op.between]: [`${from} 00:00:00`, `${to} 23:59:59`] };
-    else if (from)  delWhere.created_at = { [Op.gte]: `${from} 00:00:00` };
-    else if (to)    delWhere.created_at = { [Op.lte]: `${to} 23:59:59` };
+    if (from && to) delWhere.createdAt = { [Op.between]: [`${from} 00:00:00`, `${to} 23:59:59`] };
+    else if (from)  delWhere.createdAt = { [Op.gte]: `${from} 00:00:00` };
+    else if (to)    delWhere.createdAt = { [Op.lte]: `${to} 23:59:59` };
 
     const [paymentLogs, uniformPayments, bookPayments, expenses, deletionLogs] = await Promise.all([
       PaymentLog.findAll({ where: dateCond('date') }),
@@ -1284,8 +1286,8 @@ const getTransactions = async (req, res) => {
         type: 'deleted',
         direction: 'none',
         amount: parseFloat(d.amount) || 0,
-        date: localDate(d.created_at),
-        description: `${d.description} — deleted by ${by} on ${fmtDT(d.created_at)}${d.reason ? ` · ${d.reason}` : ''}`,
+        date: localDate(d.createdAt),
+        description: `${d.description} — deleted by ${by} on ${fmtDT(d.createdAt)}${d.reason ? ` · ${d.reason}` : ''}`,
       });
     }
 
