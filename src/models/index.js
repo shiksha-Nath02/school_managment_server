@@ -32,6 +32,7 @@ const Staff = require('./Staff');
 const Enquiry = require('./Enquiry');
 const Holiday = require('./Holiday');
 const TransactionDeletionLog = require('./TransactionDeletionLog');
+const Visitor = require('./Visitor');
 
 // ===== ASSOCIATIONS =====
 
@@ -167,4 +168,5 @@ module.exports = {
   Enquiry,
   Holiday,
   TransactionDeletionLog,
+  Visitor,
 };
