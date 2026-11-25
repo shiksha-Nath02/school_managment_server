@@ -12,6 +12,7 @@ const Visitor = sequelize.define('Visitor', {
   timeIn:      { type: DataTypes.DATE, allowNull: false, field: 'time_in' },
   timeOut:     { type: DataTypes.DATE, allowNull: true, field: 'time_out' },
   remarks:     { type: DataTypes.TEXT, allowNull: true },
+  photoKey:    { type: DataTypes.STRING(255), allowNull: true, field: 'photo_key' },
 }, {
   tableName: 'visitors',
   underscored: true,
