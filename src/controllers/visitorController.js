@@ -1,5 +1,7 @@
 const { Op } = require('sequelize');
 const { Visitor } = require('../models');
+const { saveBase64Image } = require('../utils/imageHelper');
+const { publicUrl, deleteObject, PUBLIC_BUCKET } = require('../utils/s3');
 
 const fmt = (v) => ({
   id:         v.id,
@@ -12,8 +14,22 @@ const fmt = (v) => ({
   timeIn:     v.timeIn,
   timeOut:    v.timeOut,
   remarks:    v.remarks,
+  photoUrl:   publicUrl(v.photoKey),
   createdAt:  v.created_at,
 });
+
+// Compress (shared pipeline) + upload a visitor photo to the public bucket under
+// visitors/, returning the S3 key — or null if no photo / upload failed. A photo
+// failure never blocks logging the visitor.
+async function uploadVisitorPhoto(photo, visitorId) {
+  if (!photo) return null;
+  try {
+    return await saveBase64Image(photo, `visitor_${visitorId}_${Date.now()}.jpg`, 'visitors');
+  } catch (e) {
+    console.error('Visitor photo upload failed:', e);
+    return null;
+  }
+}
 
 // Server is pinned to IST, so new Date() is already local time.
 const todayISO = () => {
@@ -52,7 +68,7 @@ const getVisitors = async (req, res) => {
 // ─── Log a new visitor (check-in) ─────────────────────────────────────────────
 const createVisitor = async (req, res) => {
   try {
-    const { name, phone, purpose, whomToMeet, numPersons, remarks, visitDate } = req.body;
+    const { name, phone, purpose, whomToMeet, numPersons, remarks, visitDate, photo } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ message: 'Visitor name is required' });
 
     const n = parseInt(numPersons, 10);
@@ -66,6 +82,10 @@ const createVisitor = async (req, res) => {
       visitDate:  visitDate || todayISO(),
       timeIn:     new Date(),
     });
+
+    const photoKey = await uploadVisitorPhoto(photo, visitor.id);
+    if (photoKey) await visitor.update({ photoKey });
+
     res.status(201).json({ message: 'Visitor logged', visitor: fmt(visitor) });
   } catch (e) {
     console.error('Create visitor error:', e);
@@ -79,7 +99,7 @@ const updateVisitor = async (req, res) => {
     const visitor = await Visitor.findByPk(req.params.id);
     if (!visitor) return res.status(404).json({ message: 'Visitor not found' });
 
-    const { name, phone, purpose, whomToMeet, numPersons, remarks, checkout } = req.body;
+    const { name, phone, purpose, whomToMeet, numPersons, remarks, checkout, photo } = req.body;
     const patch = {};
     if (name !== undefined) {
       if (!String(name).trim()) return res.status(400).json({ message: 'Visitor name is required' });
@@ -97,6 +117,16 @@ const updateVisitor = async (req, res) => {
     if (checkout === true) patch.timeOut = visitor.timeOut || new Date();
     else if (checkout === false) patch.timeOut = null;
 
+    // Optionally attach/replace the photo (same compress→S3 pipeline).
+    if (photo) {
+      const newKey = await uploadVisitorPhoto(photo, visitor.id);
+      if (newKey) {
+        const oldKey = visitor.photoKey;
+        patch.photoKey = newKey;
+        if (oldKey && oldKey !== newKey) { try { await deleteObject({ bucket: PUBLIC_BUCKET, key: oldKey }); } catch (_) {} }
+      }
+    }
+
     await visitor.update(patch);
     res.json({ message: 'Visitor updated', visitor: fmt(visitor) });
   } catch (e) {
@@ -110,6 +140,7 @@ const deleteVisitor = async (req, res) => {
   try {
     const visitor = await Visitor.findByPk(req.params.id);
     if (!visitor) return res.status(404).json({ message: 'Visitor not found' });
+    if (visitor.photoKey) { try { await deleteObject({ bucket: PUBLIC_BUCKET, key: visitor.photoKey }); } catch (_) {} }
     await visitor.destroy();
     res.json({ message: 'Visitor deleted' });
   } catch (e) {
